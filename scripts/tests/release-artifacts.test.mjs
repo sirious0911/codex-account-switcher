@@ -15,7 +15,7 @@ test('publishing requires both intact packages and a matching signed feed', asyn
       await fs.writeFile(path.join(dir, name), name);
       await fs.writeFile(path.join(dir, name + '.sha256'), createHash('sha256').update(name).digest('hex') + '  ' + name + '\n');
     }
-    const xml = `<rss><sparkle:shortVersionString>1.2.3</sparkle:shortVersionString><enclosure url="https://github.com/liuzhao1225/codex-account-switcher/releases/download/v1.2.3/${mac}" sparkle:edSignature="fixture" /></rss>`;
+    const xml = `<rss><sparkle:shortVersionString>1.2.3</sparkle:shortVersionString><enclosure url="https://github.com/sirious0911/codex-account-switcher/releases/download/v1.2.3/${mac}" sparkle:edSignature="fixture" /></rss>`;
     await fs.writeFile(path.join(dir, 'appcast.xml'), xml);
     await verifyReleaseArtifacts(dir, 'v1.2.3');
     await assert.rejects(verifyReleaseArtifacts(dir, 'v1.2.4'));

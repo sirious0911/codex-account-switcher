@@ -38,13 +38,13 @@ public sealed class NativeSettings
             Version? latest = null;
             for (var page = 1; ; page++) {
                 using var document = JsonDocument.Parse(await http.GetStringAsync(
-                    "https://api.github.com/repos/liuzhao1225/codex-account-switcher/releases?per_page=100&page=" + page));
+                    "https://api.github.com/repos/sirious0911/codex-account-switcher/releases?per_page=100&page=" + page));
                 var candidate = LatestWindowsVersion(document.RootElement);
                 if (candidate != null && (latest == null || candidate > latest)) latest = candidate;
                 if (document.RootElement.GetArrayLength() < 100) break;
             }
             UpdatePage = latest != null && latest > new Version(Version)
-                ? new Uri("https://github.com/liuzhao1225/codex-account-switcher/releases/tag/v" + latest.ToString(3)) : null;
+                ? new Uri("https://github.com/sirious0911/codex-account-switcher/releases/tag/v" + latest.ToString(3)) : null;
         } catch (Exception) { UpdateError = "update_check_failed"; }
         finally { IsChecking = false; Changed?.Invoke(); }
     }

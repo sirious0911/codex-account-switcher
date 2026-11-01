@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { assets, compareVersions, downloadVerified, installMac, installTarget, installWindows, latestRelease, macLegacyAppsToRemove, releaseChecksum, removeMacLegacyApps } from "../../npm/lib/install.mjs";
 
-const repository = "https://github.com/liuzhao1225/codex-account-switcher";
+const repository = "https://github.com/sirious0911/codex-account-switcher";
 const asset = assets.windows;
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const fixture = (version) => ({ ok: true, url: `${repository}/releases/tag/v${version}` });

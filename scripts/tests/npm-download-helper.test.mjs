@@ -12,11 +12,11 @@ test("download helper identifies the native project and both exact release asset
   const result = run("--json");
   assert.equal(result.status, 0, result.stderr);
   const info = JSON.parse(result.stdout);
-  assert.equal(info.repository, "https://github.com/liuzhao1225/codex-account-switcher");
+  assert.equal(info.repository, "https://github.com/sirious0911/codex-account-switcher");
   assert.equal(info.author, "Zhao Liu (liuzhao1225)");
   assert.equal(info.downloads.macOS, `${info.repository}/releases/latest/download/Codex-Account-Switcher-macos-arm64.dmg`);
   assert.equal(info.downloads.windows, `${info.repository}/releases/latest/download/Codex-Account-Switcher-windows-x64.exe`);
-  assert.equal(metadata.name, "@liuzhao1225/codex-account-switcher");
+  assert.equal(metadata.name, "@sirious0911/codex-account-switcher");
 });
 
 test("default invocation prints guidance and rejects unsupported commands", () => {

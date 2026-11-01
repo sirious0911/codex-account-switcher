@@ -64,6 +64,27 @@ jobs:
         shell: pwsh
         run: dotnet run --project windows/CodexAccountSwitcher.MonitorChecks -c Release
 
+  windows-swift:
+    name: Native Windows Swift host and core tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref }}
+      - name: Install Swift on ephemeral CI Windows runner
+        uses: SwiftyLab/setup-swift@v1.14.0
+        with:
+          swift-version: '6.4.1'
+      - name: Verify native Swift host
+        shell: pwsh
+        run: |
+          swift --version
+          swift build -c release --product SwitcherHost
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          swift test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   node-checks:
     name: Node and site regression
     runs-on: ubuntu-latest

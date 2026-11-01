@@ -76,33 +76,10 @@ struct SettingsView: View {
                 .fixedSize()
             }
 
-            sectionLabel("settings_updates")
-            settingRow("automatically_check_updates") {
-                settingSwitch("automatically_check_updates", isOn: Binding(
-                    get: { updater.automaticallyChecks },
-                    set: { updater.setAutomaticallyChecks($0) }
-                ))
-            }
-            Text(model.text("update_check_hint"))
+            // Upstream auto-updater is disabled; show the local version only.
+            Text(model.format("current_version", updater.currentVersion))
                 .foregroundStyle(.secondary)
                 .modifier(SettingsDetail())
-            rowDivider
-            HStack(spacing: 12) {
-                Text(model.format("current_version", updater.currentVersion))
-                    .monospacedDigit()
-                Spacer(minLength: 8)
-                Button(model.text("check_for_updates")) { updater.checkForUpdates() }
-                    .buttonStyle(.bordered)
-                    .fixedSize()
-                    .disabled((!updater.canCheckForUpdates && updater.availableVersion == nil)
-                        || updater.isInstalling || model.isMutating || model.isAddingAccount)
-            }
-            .modifier(SettingsRowLayout())
-            if let error = updater.lastError {
-                Text(model.text("update_check_failed") + " " + error)
-                    .foregroundStyle(.orange)
-                    .modifier(SettingsDetail())
-            }
         }
         .padding(.bottom, 6)
         .font(.system(size: 13))

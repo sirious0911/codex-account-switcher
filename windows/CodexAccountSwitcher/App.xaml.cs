@@ -34,6 +34,7 @@ public partial class App : Application
     private int? trayIconPercent;
     private CoreClient? client;
     private MainWindow? window;
+    private DispatcherTimer? updates;
     private bool exiting;
 
     protected override async void OnStartup(StartupEventArgs e)
@@ -73,7 +74,10 @@ public partial class App : Application
             client.Changed += RefreshTray;
             await client.InitializeAsync();
             if (!e.Args.Contains("--background")) window.OpenWindow();
-            // Upstream release polling is disabled in this safety fork.
+            updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
+            updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
+            updates.Start();
+            if (native.AutomaticallyCheckUpdates) _ = native.CheckUpdatesAsync();
         } catch (Exception ex) {
             MessageBox.Show(ex.Message, "Codex Account Switcher", MessageBoxButton.OK, MessageBoxImage.Error);
             await QuitAsync();
@@ -139,7 +143,7 @@ public partial class App : Application
     }
     private async Task QuitAsync() {
         if (exiting || window?.IsBusy == true) return;
-        exiting = true;
+        exiting = true; updates?.Stop();
         activationListener?.Unregister(null);
         if (client != null) { client.Changed -= RefreshTray; await client.DisposeAsync(); }
         window?.CloseForExit();

@@ -36,13 +36,6 @@ internal static class Program
                 [{"tag_name":"v99.0.0","draft":false,"assets":[{"name":"Codex-Account-Switcher-macos-arm64.dmg"}]}]
                 """);
             Assert(NativeSettings.LatestWindowsVersion(macOnly.RootElement) == null, "A release without a Windows EXE must never prompt a Windows update.");
-            var safetyUpdater = new NativeSettings();
-            safetyUpdater.AutomaticallyCheckUpdates = true;
-            Assert(!safetyUpdater.AutomaticallyCheckUpdates, "Fork must ignore attempts to enable upstream updates.");
-            safetyUpdater.CheckUpdatesAsync().GetAwaiter().GetResult();
-            Assert(safetyUpdater.UpdatePage == null && !safetyUpdater.IsChecking,
-                "Update checks must never surface an upstream install URL.");
-            safetyUpdater.OpenUpdate();
             Directory.CreateDirectory(output);
             var app = new App(false); app.InitializeComponent();
             var client = new FixtureClient();

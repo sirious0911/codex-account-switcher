@@ -51,29 +51,3 @@ test("new Swift tests explicitly assert disabled redemption", () => {
   assert.match(clientTests, /resetCreditConsumeIsBlockedBeforeProcessLaunch/);
   assert.match(clientTests, /CodexClientError\.resetConsumptionDisabled/);
 });
-
-test("Windows updater has no upstream HTTP or release-opening execution path", () => {
-  const native = read("windows/CodexAccountSwitcher/NativeSettings.cs");
-  const app = read("windows/CodexAccountSwitcher/App.xaml.cs");
-  const ui = read("windows/CodexAccountSwitcher/MainWindow.cs");
-  assert.match(native, /get => false;/);
-  assert.doesNotMatch(native, /GetStringAsync|new HttpClient|Process.Start/);
-  assert.doesNotMatch(app, /updates.Tick|updates.Start|native.CheckUpdatesAsync\(/);
-  assert.doesNotMatch(ui, /Run\("autoReset"|OpenUpdate\(|CheckUpdatesAsync\(|Toggle\(T\("automatically_check_updates"\)/);
-});
-
-test("macOS updater and UI never instantiate Sparkle or offer update installation", () => {
-  const updater = read("Sources/CodexAccountSwitcher/AppUpdater.swift");
-  const settings = read("Sources/CodexAccountSwitcher/SettingsView.swift");
-  const manifest = read("Package.swift");
-  assert.match(updater, /var automaticallyChecks: Bool \{ false \}/);
-  assert.doesNotMatch(updater, /import Sparkle|SPUStandardUpdaterController|SPUUpdater|checkForUpdates\(nil\)/);
-  assert.doesNotMatch(settings, /setAutomaticallyChecks\(|checkForUpdates\(\)|automatically_check_updates/);
-  assert.doesNotMatch(manifest, /Sparkle/);
-});
-
-test("macOS application packaging excludes Sparkle and upstream feed metadata", () => {
-  const packaging = read("scripts/package-local-app.sh");
-  assert.doesNotMatch(packaging, /Sparkle\.framework|SUFeedURL|SUPublicEDKey|SUEnableAutomaticChecks|sparkle-public-key\.txt/);
-  assert.match(packaging, /codesign --verify --deep --strict/);
-});

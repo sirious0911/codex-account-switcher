@@ -83,10 +83,11 @@ var targets: [Target] = [
 ]
 #if os(macOS)
 products.append(.executable(name: "CodexAccountSwitcher", targets: ["CodexAccountSwitcher"]))
+dependencies.append(.package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"))
 targets += [
     .executableTarget(
         name: "CodexAccountSwitcher",
-        dependencies: ["SwitcherCore"],
+        dependencies: ["SwitcherCore", .product(name: "Sparkle", package: "Sparkle")],
         resources: [.process("Resources")],
         linkerSettings: [
             .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),

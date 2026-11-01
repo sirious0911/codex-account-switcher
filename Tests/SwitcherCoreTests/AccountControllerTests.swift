@@ -328,8 +328,8 @@ private struct ControllerFixture {
     func writeActiveCredential() throws {
         let claims = Data(#"{"email":"demo@example.test"}"#.utf8).base64EncodedString()
         try JSONSerialization.data(withJSONObject: ["tokens": [
-            "account_id": "demo-account", "access_token": [REDACTED_SECRET],
-            "id_token": [REDACTED_SECRET],
+            "account_id": "demo-account", "access_token": "fixture-secret-token",
+            "id_token": "header.\(claims).signature",
         ]])
             .write(to: active.appendingPathComponent("auth.json"))
     }

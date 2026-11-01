@@ -131,6 +131,31 @@ struct AccountControllerTests {
         #expect(try await fixture.store.loadUsageCache().entries.first?.usage.remainingPercent == 72)
     }
 
+    @Test func freshUsageEmitsMonitorObservationButStaleRefreshDoesNot() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        var observations: [CodexMonitorObservation] = []
+        fixture.model.onMonitorObservation = { observations.append($0) }
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(observations.count == 1)
+        let first = try #require(observations.first)
+        let object = try #require(JSONSerialization.jsonObject(with: first.jsonData) as? [String: Any])
+        #expect(object["accountId"] as? String == "demo-account")
+        #expect(object["ordinaryUsageAllowed"] is NSNull)
+        let codex = try #require((object["rateLimitsByLimitId"] as? [String: Any])?["codex"] as? [String: Any])
+        #expect(codex["planType"] is NSNull)
+        #expect(codex["primary"] is NSNull)
+        #expect((codex["secondary"] as? [String: Any])?["usedPercent"] as? Int == 28)
+        #expect(first.observedAtMilliseconds > 0)
+        await fixture.client.failUsage()
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(observations.count == 1)
+    }
+
     @Test func settingsAreSavedImmediately() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }
@@ -303,8 +328,8 @@ private struct ControllerFixture {
     func writeActiveCredential() throws {
         let claims = Data(#"{"email":"demo@example.test"}"#.utf8).base64EncodedString()
         try JSONSerialization.data(withJSONObject: ["tokens": [
-            "account_id": "demo-account", "access_token": "fixture-secret-token",
-            "id_token": "header.\(claims).signature",
+            "account_id": "demo-account", "access_token": [REDACTED_SECRET],
+            "id_token": [REDACTED_SECRET],
         ]])
             .write(to: active.appendingPathComponent("auth.json"))
     }

@@ -93,6 +93,8 @@ jobs:
           dotnet run --project windows/CodexAccountSwitcher.Checks -c Release -- "$bin/SwitcherHost.exe"
       - name: Check WPF screens and data bindings with synthetic accounts
         run: dotnet run --project windows/CodexAccountSwitcher.UiChecks -c Release
+      - name: Check Swift monitor event wire samples and quota presentation
+        run: dotnet run --project windows/CodexAccountSwitcher.MonitorChecks -c Release
       - name: Package self-contained EXE
         shell: pwsh
         run: ./scripts/package-windows.ps1

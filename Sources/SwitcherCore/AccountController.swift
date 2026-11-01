@@ -8,6 +8,8 @@ private enum UsageRefreshResult: Sendable {
 @MainActor
 open class AccountController {
     public var onChange: (@MainActor () -> Void)?
+    /// Emitted only for newly fetched usage, never for cache or stale readings.
+    public var onMonitorObservation: (@MainActor (CodexMonitorObservation) -> Void)?
     public private(set) var accounts: [AccountProfile] = [] { didSet { onChange?() } }
     public private(set) var activeAccountID: UUID? { didSet { onChange?() } }
     public private(set) var usageStates: [UUID: UsageViewState] = [:] { didSet { onChange?() } }
@@ -171,6 +173,12 @@ open class AccountController {
                 case let .success(id, usage):
                     guard let account = accounts.first(where: { $0.id == id }) else { continue }
                     usageStates[id] = .loaded(usage)
+                    if let observation = CodexMonitorPayloadEncoder.encode(
+                        profile: account, usage: usage,
+                        planType: nil, ordinaryUsageAllowed: nil, observedAt: Date()
+                    ) {
+                        onMonitorObservation?(observation)
+                    }
                     do {
                         try await store.cacheWeeklyUsage(usage, profileID: id)
                     } catch {

@@ -78,6 +78,9 @@ private final class Host {
                 switchService: SwitchService(desktop: DesktopAdapter(host: self), store: store, codex: CredentialIdentity()))
             controller = model
             model.onChange = { [weak self] in self?.sendSnapshot() }
+            model.onMonitorObservation = { [weak self] observation in
+                self?.sendMonitorObservation(observation)
+            }
             await model.startBackgroundUsageRefresh()
             sendSnapshot()
             return
@@ -116,6 +119,11 @@ private final class Host {
         case "dismissError": model.dismissError()
         default: throw HostError.message("Unknown host command.")
         }
+    }
+
+    private func sendMonitorObservation(_ observation: CodexMonitorObservation) {
+        guard let raw = try? JSONSerialization.jsonObject(with: observation.jsonData) as? [String: Any] else { return }
+        send(["kind": "monitorObservation", "observedAtMs": observation.observedAtMilliseconds, "raw": raw])
     }
 
     private func sendSnapshot() {

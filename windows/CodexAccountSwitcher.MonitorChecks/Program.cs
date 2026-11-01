@@ -83,4 +83,28 @@ Check("empty account set produces empty monitor", MonitorOverview.From(AccountSn
 Check("monitor projections never mutate account snapshot", live.Accounts[0].Usage!.ResetCreditsRemaining == 0 &&
     live.Accounts[1].Usage is null && live.ActiveAccountID == accountID);
 
+using (var wire = JsonDocument.Parse("{\"kind\":\"monitorObservation\",\"observedAtMs\":1800000000000,\"raw\":" + valid + "}"))
+{
+    Check("Swift wire observation parses as a Windows monitor sample",
+        CodexMonitorWireSample.TryParse(wire.RootElement, out var current) &&
+        current is not null && current.ObservedAtMilliseconds == 1_800_000_000_000);
+    Check("wire parser preserves exact raw JSON and existing monitor values",
+        CodexMonitorWireSample.TryParse(wire.RootElement, out var parsed) &&
+        parsed is not null && MonitorSyntheticPreview.TryRead(parsed.RawJson, out var usage) &&
+        usage?.FiveHourRemaining == 30 && usage.WeeklyRemaining == 60);
+}
+using (var missingPlan = JsonDocument.Parse("{\"kind\":\"monitorObservation\",\"observedAtMs\":1800000000000,\"raw\":" +
+    valid.Replace("\"planType\":\"plus\"", "\"planType\":null") + "}"))
+{
+    Check("Swift wire retains UNKNOWN plan rather than inferring one",
+        CodexMonitorWireSample.TryParse(missingPlan.RootElement, out var parsed) &&
+        parsed is not null && MonitorSyntheticPreview.TryRead(parsed.RawJson, out var usage) &&
+        usage?.HasVerifiedPlan == false);
+}
+using (var invalid = JsonDocument.Parse("{\"kind\":\"monitorObservation\",\"observedAtMs\":-1,\"raw\":" + valid + "}"))
+    Check("invalid wire timestamp rejected", !CodexMonitorWireSample.TryParse(invalid.RootElement, out _));
+using (var invalid = JsonDocument.Parse("{\"kind\":\"unrelated\",\"observedAtMs\":1800000000000,\"raw\":" + valid + "}"))
+    Check("unrelated host protocol message not misread as monitor observation",
+        !CodexMonitorWireSample.TryParse(invalid.RootElement, out _));
+
 Console.WriteLine($"MONITOR_SYNTHETIC_PREVIEW_PASS checks={checks} realCodexReads=0 actualAccountSwitches=0 telegramSends=0");

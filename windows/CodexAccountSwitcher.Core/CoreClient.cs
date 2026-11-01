@@ -19,6 +19,8 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
     private int nextID;
     public AccountSnapshot State { get; private set; } = AccountSnapshot.Empty;
     public event Action? Changed;
+    /// Successful fresh quota samples from Swift, independent from cached UI snapshots.
+    public event Action<CodexMonitorWireSample>? MonitorObserved;
 
     public CoreClient(string hostPath, string dataPath, string? activeHome = null)
     {
@@ -78,6 +80,10 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
                         var state = message.GetProperty("state").Deserialize<AccountSnapshot>(AccountSnapshot.JsonOptions)
                             ?? throw new IOException("Invalid account state.");
                         context.Post(_ => { State = state; Changed?.Invoke(); }, null);
+                        break;
+                    case "monitorObservation":
+                        if (CodexMonitorWireSample.TryParse(message, out var observation) && observation is not null)
+                            context.Post(_ => MonitorObserved?.Invoke(observation), null);
                         break;
                     case "completed":
                         if (pending.TryRemove(message.GetProperty("id").GetInt32(), out var completion)) {

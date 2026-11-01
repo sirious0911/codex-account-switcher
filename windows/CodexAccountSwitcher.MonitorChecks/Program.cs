@@ -107,4 +107,63 @@ using (var invalid = JsonDocument.Parse("{\"kind\":\"unrelated\",\"observedAtMs\
     Check("unrelated host protocol message not misread as monitor observation",
         !CodexMonitorWireSample.TryParse(invalid.RootElement, out _));
 
+
+var temporaryRoot = Path.Combine(Path.GetTempPath(), "switcher-local-monitor-" + Guid.NewGuid().ToString("N"));
+try
+{
+    static CodexMonitorWireSample Sample(string data, long ms) => new(ms, data);
+    const long t0 = 1_800_000_000_000L;
+    var worker = new LocalMonitorWorker(temporaryRoot);
+    var starting = valid.Replace("\"availableCount\":2", "\"availableCount\":1");
+    var first = worker.Process(Sample(starting, t0));
+    Check("local worker records silent baseline",
+        first.EventKinds.Count == 0 && first.MockAlertMessages.Count == 0 &&
+        first.MonitorPreview.Contains("5H 30%"));
+    var pending = worker.Process(Sample(valid, t0 + 60_000));
+    Check("first credit increase remains unconfirmed",
+        pending.EventKinds.Count == 0 && pending.UniqueEventCount == 0);
+    var confirmed = worker.Process(Sample(valid, t0 + 120_000));
+    Check("confirmed mock event is recorded once",
+        confirmed.EventKinds.SequenceEqual(new[] { "CREDIT_INCREASE" }) &&
+        confirmed.MockAlertMessages.Count == 1 &&
+        confirmed.UniqueEventCount == 1 && confirmed.CompletedMockDeliveries == 1);
+    Check("mock messages do not expose provider IDs",
+        confirmed.MockAlertMessages[0].Contains("[모의 알림]") &&
+        !confirmed.MockAlertMessages[0].Contains("provider-account-1"));
+    var restarted = new LocalMonitorWorker(temporaryRoot);
+    var replay = restarted.Process(Sample(valid, t0 + 180_000));
+    Check("restart restores ledger and prevents repeated mock alert",
+        replay.EventKinds.Count == 0 && replay.MockAlertMessages.Count == 0 &&
+        replay.UniqueEventCount == 1 && replay.CompletedMockDeliveries == 1);
+    var older = restarted.Process(Sample(starting, t0 + 90_000));
+    Check("out-of-order observation does not reset confirmed event",
+        older.EventKinds.Count == 0 && older.UniqueEventCount == 1);
+    var other = valid.Replace("provider-account-1", "provider-account-2");
+    restarted.Process(Sample(starting.Replace("provider-account-1", "provider-account-2"), t0));
+    restarted.Process(Sample(other, t0 + 60_000));
+    var otherConfirmed = restarted.Process(Sample(other, t0 + 120_000));
+    var accountFolders = Directory.GetDirectories(Path.Combine(temporaryRoot, "usage-monitor"));
+    Check("two accounts have separate persistent ledgers",
+        otherConfirmed.EventKinds.SequenceEqual(new[] { "CREDIT_INCREASE" }) &&
+        accountFolders.Length == 2);
+    Check("provider IDs do not appear in account directory names",
+        accountFolders.All(folder => !folder.Contains("provider-account-")));
+    var stateFolder = accountFolders.Single(folder =>
+        File.ReadAllText(Path.Combine(folder, "state.json")).Contains("provider-account-1"));
+    File.WriteAllText(Path.Combine(stateFolder, "state.json.tmp"), "interrupted mock write");
+    var recovered = restarted.Process(Sample(valid, t0 + 240_000));
+    Check("orphaned temp file recovery keeps committed ledger",
+        recovered.EventKinds.Count == 0 && recovered.UniqueEventCount == 1 &&
+        !File.Exists(Path.Combine(stateFolder, "state.json.tmp")));
+    var unknownWorker = new LocalMonitorWorker(Path.Combine(temporaryRoot, "unknown"));
+    var unknown = valid.Replace("\"planType\":\"plus\"", "\"planType\":null")
+        .Replace("\"ordinaryUsageAllowed\":true", "\"ordinaryUsageAllowed\":null");
+    unknownWorker.Process(Sample(unknown.Replace("\"availableCount\":2", "\"availableCount\":1"), t0));
+    unknownWorker.Process(Sample(unknown, t0 + 60_000));
+    var unverified = unknownWorker.Process(Sample(unknown, t0 + 120_000));
+    Check("unknown live plan cannot produce an alert",
+        unverified.EventKinds.Count == 0 && unverified.MockAlertMessages.Count == 0);
+}
+finally { if (Directory.Exists(temporaryRoot)) Directory.Delete(temporaryRoot, recursive: true); }
+
 Console.WriteLine($"MONITOR_SYNTHETIC_PREVIEW_PASS checks={checks} realCodexReads=0 actualAccountSwitches=0 telegramSends=0");

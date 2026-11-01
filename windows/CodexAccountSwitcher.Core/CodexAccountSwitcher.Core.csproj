@@ -2,5 +2,6 @@
   <!-- Native Windows adapters and presentation transport only. Business logic is SwitcherCore (Swift). -->
   <ItemGroup>
     <InternalsVisibleTo Include="CodexAccountSwitcher.Checks" />
+    <ProjectReference Include="../../monitor/dotnet-core/CodexUsageMonitor.Core.csproj" />
   </ItemGroup>
 </Project>

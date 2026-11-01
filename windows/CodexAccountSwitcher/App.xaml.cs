@@ -33,6 +33,7 @@ public partial class App : Application
     private System.Drawing.Size trayIconSize;
     private int? trayIconPercent;
     private CoreClient? client;
+    private LocalMonitorWorker? monitorWorker;
     private MainWindow? window;
     private DispatcherTimer? updates;
     private bool exiting;
@@ -51,6 +52,8 @@ public partial class App : Application
             if (!ownsMutex) { activateWindow.Set(); Shutdown(); return; }
             ApplyTheme();
             client = new CoreClient(HostRuntime.Resolve(Assembly.GetExecutingAssembly()), dataPath);
+            monitorWorker = new LocalMonitorWorker(dataPath);
+            client.MonitorObserved += OnMonitorObserved;
             var native = new NativeSettings();
             window = new MainWindow(client, native); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
@@ -81,6 +84,16 @@ public partial class App : Application
         } catch (Exception ex) {
             MessageBox.Show(ex.Message, "Codex Account Switcher", MessageBoxButton.OK, MessageBoxImage.Error);
             await QuitAsync();
+        }
+    }
+
+    private void OnMonitorObserved(CodexMonitorWireSample sample)
+    {
+        try { monitorWorker?.Process(sample); }
+        catch (Exception ex) {
+            // Monitoring is supplementary: a failed local preview does not
+            // interfere with the original account-switching UI.
+            System.Diagnostics.Trace.TraceWarning("Local monitor persistence failed: " + ex.GetType().Name);
         }
     }
 
@@ -145,7 +158,11 @@ public partial class App : Application
         if (exiting || window?.IsBusy == true) return;
         exiting = true; updates?.Stop();
         activationListener?.Unregister(null);
-        if (client != null) { client.Changed -= RefreshTray; await client.DisposeAsync(); }
+        if (client != null) {
+            client.MonitorObserved -= OnMonitorObserved;
+            client.Changed -= RefreshTray;
+            await client.DisposeAsync();
+        }
         window?.CloseForExit();
         Shutdown();
     }
@@ -160,7 +177,21 @@ public partial class App : Application
             await core.CommandAsync("fiveHour", value: true).WaitAsync(TimeSpan.FromSeconds(10));
             if (!File.Exists(Path.Combine(root, "data", "settings.json"))) throw new IOException("Shared settings were not persisted.");
             if (File.Exists(Path.Combine(root, "active", "auth.json"))) throw new IOException("Empty startup created an unexpected credential.");
-            result += ": bundled .NET, extracted Swift runtime, shared host and isolated settings.";
+            var monitorFixture = """
+                {"accountId":"SELFTEST_ACCOUNT","ordinaryUsageAllowed":null,
+                 "rateLimitsByLimitId":{"codex":{"planType":null,"primary":{"usedPercent":30,"windowDurationMins":300,"resetsAt":1800030000},
+                 "secondary":{"usedPercent":60,"windowDurationMins":10080,"resetsAt":1800600000}}},
+                 "rateLimitResetCredits":{"availableCount":1}}
+                """;
+            var observation = new CodexMonitorWireSample(1_800_000_000_000, monitorFixture);
+            var monitor = new LocalMonitorWorker(Path.Combine(root, "data"));
+            var first = monitor.Process(observation);
+            var restored = new LocalMonitorWorker(Path.Combine(root, "data")).Process(observation);
+            if (first.EventKinds.Count != 0 || restored.EventKinds.Count != 0 ||
+                !restored.MonitorPreview.Contains("5H 70%") ||
+                !Directory.Exists(Path.Combine(root, "data", "usage-monitor")))
+                throw new IOException("Bundled local monitor state could not be restored.");
+            result += ": bundled .NET, extracted Swift runtime, shared host, isolated settings and local monitor ledger.";
         } catch (Exception ex) { result = "FAIL: " + ex; exitCode = 1; }
         finally { if (Directory.Exists(root)) SecureFiles.DeleteOwnedDirectory(Path.GetTempPath(), root); }
         if (Environment.GetEnvironmentVariable("CODEX_SWITCHER_SELF_TEST_RESULT") is { } output) File.WriteAllText(output, result);

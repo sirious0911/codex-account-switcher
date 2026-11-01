@@ -93,6 +93,11 @@ public sealed class MainWindow : Window
         if (page == "accounts") {
             var commands = new StackPanel { Orientation = Orientation.Horizontal };
             commands.Children.Add(Button(T("manage"), () => Navigate("manage"), "\uE716"));
+            var monitorButton = Button("", () => Navigate("monitor"), "\uE9CE");
+            monitorButton.Margin = new Thickness(8, 0, 0, 0);
+            monitorButton.ToolTip = T("monitor_title");
+            AutomationProperties.SetName(monitorButton, T("monitor_title"));
+            commands.Children.Add(monitorButton);
             var settings = Button("", () => Navigate("settings"), "\uE713");
             settings.Margin = new Thickness(8, 0, 0, 0); settings.ToolTip = T("settings");
             AutomationProperties.SetName(settings, T("settings"));
@@ -112,12 +117,13 @@ public sealed class MainWindow : Window
             AutomationProperties.SetName(header.Children[0], T("back"));
             var title = target != null && page is "switch" or "remove"
                 ? T(page + "_title").Replace("%@", target.Profile.DisplayName)
-                : T(page == "settings" ? "settings" : "accounts");
+                : T(page == "settings" ? "settings" : page == "monitor" ? "monitor_title" : "accounts");
             var heading = Text(title, 20, bold: true); heading.Margin = new Thickness(12, 0, 0, 0); header.Children.Add(heading);
             body.Children.Add(header);
         }
         if (page is "switch" or "remove") Confirmation(body);
         else if (page == "settings") Settings(body);
+        else if (page == "monitor") Monitor(body);
         else Accounts(body, page == "manage");
         Content = new Border { Background = B("Surface"),
             Child = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
@@ -233,6 +239,39 @@ public sealed class MainWindow : Window
         var confirm = Button(T(command), () => { Navigate(command == "remove" ? "manage" : "accounts"); _ = Run(command, id); });
         confirm.Margin = new Thickness(8, 0, 0, 0); confirm.BorderBrush = B("Accent"); confirm.IsDefault = true; buttons.Children.Add(confirm); content.Children.Add(buttons); body.Children.Add(content);
     }
+    private void Monitor(StackPanel body)
+    {
+        var content = new StackPanel { Margin = new Thickness(20, 0, 20, 20) };
+        var note = Text(T("monitor_source_hint"), 11, muted: true);
+        note.TextWrapping = TextWrapping.Wrap;
+        note.Margin = new Thickness(0, 0, 0, 12);
+        content.Children.Add(note);
+        var rows = MonitorOverview.From(State);
+        if (rows.Count == 0) content.Children.Add(Text(T("no_accounts"), 12, muted: true));
+        foreach (var row in rows) {
+            var section = new StackPanel { Margin = new Thickness(0, 0, 0, 15) };
+            section.Children.Add(Text(row.AccountLabel + (row.IsActive ? " · " + T("active") : ""), 13, bold: true));
+            if (row.HasUsageError) {
+                var status = Text(T("monitor_last_known"), 10.5, muted: true);
+                status.Margin = new Thickness(0, 3, 0, 0);
+                section.Children.Add(status);
+            }
+            if (row.FiveHourRemainingPercent is { } five && row.FiveHourResetsAt is { } fiveReset)
+                section.Children.Add(UsageLine(T("five_hour"), five, Reset(fiveReset)));
+            else section.Children.Add(Text(T("five_hour") + ": " + T("unknown"), 11, muted: true));
+            if (row.WeeklyRemainingPercent is { } week && row.WeeklyResetsAt is { } weekReset)
+                section.Children.Add(UsageLine(T("weekly"), week, Reset(weekReset)));
+            else section.Children.Add(Text(T("weekly") + ": " + T("unknown"), 11, muted: true));
+            var credits = Text(T("reset_credits") + ": " +
+                (row.ResetCreditsRemaining?.ToString(CultureInfo.CurrentCulture) ?? T("unknown")), 11, muted: true);
+            credits.Margin = new Thickness(0, 4, 0, 0);
+            section.Children.Add(credits);
+            content.Children.Add(section);
+        }
+        content.Children.Add(Button(T("monitor_refresh"), () => _ = Run("refresh"), "\uE72C", left: true));
+        body.Children.Add(content);
+    }
+
     private void Settings(StackPanel body)
     {
         var settings = new StackPanel { Margin = new Thickness(20, 0, 20, 20) };

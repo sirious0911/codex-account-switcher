@@ -57,4 +57,30 @@ Check("null payload rejected", !Parse(null, out _));
 Check("missing rate limits rejected", !Parse("{" + "\"accountId\":\"id\"" + "}", out _));
 Check("no external process or filesystem methods in parser", typeof(MonitorSyntheticPreview).GetMethods().Where(m => m.DeclaringType == typeof(MonitorSyntheticPreview)).All(m => m.Name == "TryRead"));
 
+var accountID = Guid.Parse("11111111-1111-1111-1111-111111111111");
+var otherID = Guid.Parse("22222222-2222-2222-2222-222222222222");
+var resetTime = DateTimeOffset.FromUnixTimeSeconds(1_800_500_000);
+var live = new AccountSnapshot(
+    [
+        new(new(accountID, "Personal", "personal@example.test"), "P",
+            new(65, resetTime, 35, resetTime.AddHours(-2), 0), null),
+        new(new(otherID, "Studio", null), "S", null, "refresh unavailable", "error")
+    ],
+    accountID, new(), false, false, true, null, new Dictionary<string, string>());
+var overview = MonitorOverview.From(live);
+Check("existing account snapshot produces two monitor rows", overview.Count == 2);
+Check("confirmed active account is identified without switching", overview[0].IsActive && !overview[1].IsActive);
+Check("snapshot weekly and five-hour quotas are preserved", overview[0].WeeklyRemainingPercent == 65 && overview[0].FiveHourRemainingPercent == 35);
+Check("snapshot reset times are preserved", overview[0].WeeklyResetsAt == resetTime &&
+    overview[0].FiveHourResetsAt == resetTime.AddHours(-2));
+Check("actual zero credits differ from unknown credits", overview[0].ResetCreditsRemaining == 0 &&
+    overview[1].ResetCreditsRemaining == null);
+Check("unavailable quota stays unknown and exposes error state", overview[1].WeeklyRemainingPercent == null &&
+    overview[1].FiveHourRemainingPercent == null && overview[1].HasUsageError && overview[1].UsageStatus == "error");
+Check("account display name is used if there is no email", overview[1].AccountLabel == "Studio");
+Check("unconfirmed active identity is not invented", MonitorOverview.From(live with { ActiveIdentityConfirmed = false }).All(row => !row.IsActive));
+Check("empty account set produces empty monitor", MonitorOverview.From(AccountSnapshot.Empty).Count == 0);
+Check("monitor projections never mutate account snapshot", live.Accounts[0].Usage!.ResetCreditsRemaining == 0 &&
+    live.Accounts[1].Usage is null && live.ActiveAccountID == accountID);
+
 Console.WriteLine($"MONITOR_SYNTHETIC_PREVIEW_PASS checks={checks} realCodexReads=0 actualAccountSwitches=0 telegramSends=0");

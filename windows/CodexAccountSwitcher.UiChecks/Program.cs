@@ -115,7 +115,9 @@ internal static class Program
             Assert(!All<TextBlock>(window).Any(text => text.Text is "保存" or "Save"), "Settings must not have a Save flow.");
             client.State = client.State with { Settings = client.State.Settings with { ShowsFiveHourUsage = true, AutoResetEnabled = true } };
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-auto-reset-enabled-zh.png"));
-            Assert(All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
+            var enabledToggles = All<CheckBox>(window).ToArray();
+            if (!enabledToggles.Any(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset"))) throw new Exception("Settings toggle absent: page=" + window.CurrentPage + "; total=" + enabledToggles.Length + "; names=" + string.Join(", ", enabledToggles.Select(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle))) + "; expected=" + client.State.Text("auto_reset"));
+            Assert(enabledToggles.Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
                 "The auto-reset toggle must reflect the persisted setting.");
             window.Navigate("accounts"); Render(window, Path.Combine(output, "accounts-five-hour-zh.png"));
             Assert(All<TextBlock>(window).Count(text => text.Text == "5 小时") == 2, "Five-hour view must be per account.");
@@ -141,11 +143,51 @@ internal static class Program
             client.State = client.State with { IsMutating = false };
             window.CloseForExit();
             Assert(closed, "Explicit application exit must release the window.");
+            VerifyMonitorPage(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyMonitorPage(string output)
+    {
+        var client = new FixtureClient();
+        var window = new MainWindow(client);
+        Render(window, Path.Combine(output, "monitor-account-list-zh.png"));
+        var commandsBefore = client.Commands.Count;
+        var untouched = client.State;
+        var monitorButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == client.State.Text("monitor_title"));
+        monitorButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert(window.CurrentPage == "monitor" && client.Commands.Count == commandsBefore,
+            "Opening the monitor must not issue a change or sign-in command.");
+        Render(window, Path.Combine(output, "monitor-zh.png"));
+        var texts = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(texts.Any(text => text.Contains("personal@example.test")) &&
+               texts.Any(text => text.Contains("studio@example.test")),
+            "Monitor must show both account snapshot rows.");
+        Assert(texts.Count(text => text == "5 小时") == 2 &&
+               texts.Count(text => text == "7 天") == 2,
+            "Monitor must display both quota windows independent of the home toggle.");
+        Assert(texts.Contains("重置次数: 2") && texts.Contains("重置次数: 未知"),
+            "Reset credits must distinguish reported quantity and UNKNOWN.");
+        var unavailable = untouched.Accounts[1] with {
+            Usage = null, UsageStatus = "error", UsageError = "fixture refresh failed"
+        };
+        client.State = untouched with { Accounts = new[] { untouched.Accounts[0], unavailable } };
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "monitor-unavailable-zh.png"));
+        var missing = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(missing.Contains("5 小时: 未知") && missing.Contains("7 天: 未知"),
+            "Unreported quota windows must display UNKNOWN, not 0%.");
+        var refreshButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == client.State.Text("monitor_refresh"));
+        refreshButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert(client.Commands.SequenceEqual(new[] { "refresh:" }),
+            "Refresh must use the existing usage-refresh command, not an account switch.");
+        window.CloseForExit();
+    }
+
     private static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     private static IEnumerable<T> All<T>(DependencyObject parent) where T : DependencyObject {
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) {
@@ -174,7 +216,8 @@ internal static class Program
                     "loaded", new(new DateTimeOffset(2099, 10, 17, 12, 0, 0, TimeSpan.Zero), time)),
                 new(new(Guid.Parse("22222222-2222-2222-2222-222222222222"), "Studio", "studio@example.test"), "S", new(56, time.AddHours(1), 68, time.AddHours(-1)), null)
             ], id, new("simplifiedChinese"), false, false, true, null, new() {
-                ["usage"] = "用量", ["resets"] = "重置于", ["reset_credits"] = "重置次数", ["unknown"] = "未知", ["left"] = "% 剩余", ["manage"] = "管理账号", ["settings"] = "设置", ["quit"] = "退出应用",
+                ["monitor_title"] = "用量监控", ["monitor_source_hint"] = "从现有服务读取的用量快照。", ["monitor_refresh"] = "刷新用量",
+                ["monitor_last_known"] = "上次记录的数据。", ["usage"] = "用量", ["resets"] = "重置于", ["reset_credits"] = "重置次数", ["unknown"] = "未知", ["left"] = "% 剩余", ["manage"] = "管理账号", ["settings"] = "设置", ["quit"] = "退出应用",
                 ["subscription_until"] = "有效期：%@", ["subscription_snapshot"] = "登录快照", ["subscription_old_snapshot"] = "旧登录快照",
                 ["subscription_unknown"] = "有效期：未知", ["subscription_detail"] = "最近核验于 %@。",
                 ["accounts"] = "账号", ["back"] = "返回", ["active"] = "当前", ["remove"] = "移除", ["add_account"] = "添加账号",

@@ -158,39 +158,107 @@ struct AccountControllerTests {
         #expect(fixture.model.activeRemainingPercent == 72)
     }
 
-    @Test func enablingAutoResetIsRejectedWithoutConsumingOrScheduling() async throws {
+    @Test func autoResetConsumesBeforeOrdinaryPollAndStopsWhenDisabled() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.model.stopBackgroundUsageRefresh(); fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.client.setResetExpiry(Date().addingTimeInterval(602))
+        await fixture.model.startBackgroundUsageRefresh(every: .seconds(3600))
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(!FileManager.default.fileExists(atPath: fixture.store.resetExpiryLogURL.path))
+        await fixture.model.setAutoResetEnabled(true)
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(try await fixture.store.loadSettings().autoResetEnabled)
+        try await Task.sleep(for: .seconds(3))
+        await fixture.model.waitForWeeklyUsageRefresh()
+        let events = try await fixture.store.loadResetExpiryLog()
+        #expect(events.contains { $0.checkpointMinutes == 10 && $0.decision == "attempt" })
+        #expect(events.contains { $0.event == "reset_result" && $0.outcome == .reset && $0.resetAttempted })
+        #expect(events.contains { $0.event == "reset_verified" && $0.usage?.remainingPercent == 100 })
+        #expect(await fixture.client.consumeCalls == 1)
+        #expect(fixture.model.usageStates.values.first?.displayedUsage?.resetCreditsRemaining == 0)
+        await fixture.model.setAutoResetEnabled(false)
+        let count = try await fixture.store.loadResetExpiryLog().count
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(try await fixture.store.loadResetExpiryLog().count == count)
+        #expect(try await !fixture.store.loadSettings().autoResetEnabled)
+        #expect(fixture.model.visibleError == nil)
+    }
+
+    @Test func experimentLogFailureIsVisible() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        await fixture.model.start()
+        try FileManager.default.createDirectory(at: fixture.store.resetExpiryLogURL, withIntermediateDirectories: false)
+        await fixture.model.setAutoResetEnabled(true)
+        #expect(fixture.model.visibleError != nil)
+    }
+
+    @Test func resetFailurePreservesOriginalErrorAndNeverRetriesAfterRestart() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }
         try fixture.writeActiveCredential()
         await fixture.client.setResetExpiry(Date().addingTimeInterval(590))
+        await fixture.client.failReset()
         await fixture.model.start()
         await fixture.model.setAutoResetEnabled(true)
-        fixture.model.refreshWeeklyUsage()
         await fixture.model.waitForWeeklyUsageRefresh()
-        #expect(!fixture.model.settings.autoResetEnabled)
-        #expect(try await !fixture.store.loadSettings().autoResetEnabled)
-        #expect(await fixture.client.consumeCalls == 0)
-        #expect(!FileManager.default.fileExists(atPath: fixture.store.resetExpiryLogURL.path))
-        #expect(fixture.model.visibleError?.message.contains("disabled") == true)
+        #expect(await fixture.client.consumeCalls == 1)
+        #expect(fixture.model.visibleError?.message.contains("fixture reset unavailable") == true)
+        let events = try await fixture.store.loadResetExpiryLog()
+        #expect(events.last?.event == "reset_result")
+        #expect(events.last?.error?.contains("503") == true)
+        // Reinitializing from saved history must retain the failed attempt.
+        await fixture.model.setAutoResetEnabled(false)
+        await fixture.model.setAutoResetEnabled(true)
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.consumeCalls == 1)
     }
 
-    @Test func disablingAutoResetDoesNotTouchCredentialsOrLogs() async throws {
+    @Test(arguments: [true, false])
+    func allSavedAccountsConsumeWithoutChangingTheActiveLogin(hasActiveLogin: Bool) async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        if hasActiveLogin { try fixture.writeActiveCredential() }
+        for index in 1...2 {
+            let profile = AccountProfile(id: UUID(), displayName: "Saved \(index)", email: "saved\(index)@example.test",
+                accountID: "saved-\(index)", createdAt: Date())
+            let home = try await fixture.store.createProfileDirectory(id: profile.id)
+            try Data("saved-fixture".utf8).write(to: home.appending(path: "auth.json"))
+            try await fixture.store.addProfile(profile)
+        }
+        await fixture.model.start()
+        let originalActiveID = fixture.model.activeAccountID
+        await fixture.client.setResetExpiry(Date().addingTimeInterval(590))
+        await fixture.model.setAutoResetEnabled(true)
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.consumeCalls == (hasActiveLogin ? 3 : 2))
+        #expect(fixture.model.activeAccountID == originalActiveID)
+        #expect(fixture.model.usageStates.values.allSatisfy { $0.displayedUsage?.resetCreditsRemaining == 0 })
+        let events = try await fixture.store.loadResetExpiryLog()
+        #expect(Set(events.filter { $0.event == "reset_verified" }.compactMap(\.profileID)) == Set(fixture.model.accounts.map(\.id)))
+        #expect(fixture.model.visibleError == nil)
+    }
+
+    @Test func successfulReplyWithoutConsumptionIsLoggedAsVerificationFailure() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }
         try fixture.writeActiveCredential()
-        let original = try Data(contentsOf: fixture.active.appending(path: "auth.json"))
+        await fixture.client.setResetExpiry(Date().addingTimeInterval(590))
+        await fixture.client.doNotConfirmConsumption()
         await fixture.model.start()
-        await fixture.model.setAutoResetEnabled(false)
-        #expect(!fixture.model.settings.autoResetEnabled)
-        #expect(await fixture.client.consumeCalls == 0)
-        #expect(!FileManager.default.fileExists(atPath: fixture.store.resetExpiryLogURL.path))
-        #expect(try Data(contentsOf: fixture.active.appending(path: "auth.json")) == original)
-    }
-
-    @Test func existingLegacyTrueIsIgnoredBySettingsDecoder() throws {
-        let old = Data(#"{"language":"system","autoResetEnabled":true}"#.utf8)
-        #expect(try !JSONDecoder().decode(AppSettings.self, from: old).autoResetEnabled)
-        #expect(!AppSettings(language: .system, autoResetEnabled: true).autoResetEnabled)
+        await fixture.model.setAutoResetEnabled(true)
+        await fixture.model.waitForWeeklyUsageRefresh()
+        let events = try await fixture.store.loadResetExpiryLog()
+        #expect(events.contains { $0.event == "reset_result" && $0.outcome == .reset })
+        #expect(events.last?.event == "reset_verification_failed")
+        #expect(events.last?.usage?.resetCreditsRemaining == 1)
+        #expect(fixture.model.visibleError?.message.contains("did not confirm") == true)
+        #expect(!events.contains { $0.event == "reset_verified" })
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.consumeCalls == 1)
     }
 
     @Test func activeProfileCannotBeRemoved() async throws {
@@ -235,8 +303,8 @@ private struct ControllerFixture {
     func writeActiveCredential() throws {
         let claims = Data(#"{"email":"demo@example.test"}"#.utf8).base64EncodedString()
         try JSONSerialization.data(withJSONObject: ["tokens": [
-            "account_id": "demo-account", "access_token": [REDACTED_SECRET],
-            "id_token": [REDACTED_SECRET],
+            "account_id": "demo-account", "access_token": "fixture-secret-token",
+            "id_token": "header.\(claims).signature",
         ]])
             .write(to: active.appendingPathComponent("auth.json"))
     }

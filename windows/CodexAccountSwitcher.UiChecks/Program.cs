@@ -105,16 +105,18 @@ internal static class Program
             var fiveHour = All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == "显示 5 小时用量");
             fiveHour.IsChecked = true; fiveHour.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
             Assert(client.Commands.Single() == "fiveHour:True", "Settings must save immediately.");
-            Assert(!All<CheckBox>(window).Any(toggle =>
-                System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")),
-                "Disallowed auto reset option must not appear in Windows settings.");
-            Assert(client.Commands.SequenceEqual(new[] { "fiveHour:True" }),
-                "Settings must never send an auto-reset command.");
+            var experiment = All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset"));
+            Assert(experiment.IsChecked == false, "Auto-reset must default to off.");
+            experiment.IsChecked = true; experiment.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
+            Assert(client.Commands.SequenceEqual(new[] { "fiveHour:True", "autoReset:True" }),
+                "The auto-reset toggle must send the setting to the shared host.");
+            Assert(All<TextBlock>(window).Any(text => text.Text == client.State.Text("auto_reset_hint")),
+                "Settings must disclose real reset consumption and runtime requirements.");
+            Assert(!All<TextBlock>(window).Any(text => text.Text is "保存" or "Save"), "Settings must not have a Save flow.");
             client.State = client.State with { Settings = client.State.Settings with { ShowsFiveHourUsage = true, AutoResetEnabled = true } };
-            window.Navigate("settings"); Render(window, Path.Combine(output, "settings-auto-reset-disabled-zh.png"));
-            Assert(!All<CheckBox>(window).Any(toggle =>
-                System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")),
-                "Persisted true must not expose redemption toggle.");
+            window.Navigate("settings"); Render(window, Path.Combine(output, "settings-auto-reset-enabled-zh.png"));
+            Assert(All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
+                "The auto-reset toggle must reflect the persisted setting.");
             window.Navigate("accounts"); Render(window, Path.Combine(output, "accounts-five-hour-zh.png"));
             Assert(All<TextBlock>(window).Count(text => text.Text == "5 小时") == 2, "Five-hour view must be per account.");
             var closed = false; window.Closed += (_, _) => closed = true;

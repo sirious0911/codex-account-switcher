@@ -106,7 +106,8 @@ private final class Host {
             guard let value = request.value else { throw HostError.message("Missing setting.") }
             await model.setShowsFiveHourUsage(value)
         case "autoReset":
-            throw HostError.message("Automatic reset-credit consumption is disabled.")
+            guard let value = request.value else { throw HostError.message("Missing setting.") }
+            await model.setAutoResetEnabled(value)
         case "statusBarUsageWindow":
             guard let raw = request.language, let window = StatusBarUsageWindow(rawValue: raw) else {
                 throw HostError.message("Invalid status bar usage window.")

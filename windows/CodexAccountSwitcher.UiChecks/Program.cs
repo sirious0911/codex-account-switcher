@@ -152,7 +152,11 @@ internal static class Program
     private static void VerifyMonitorPage(string output)
     {
         var client = new FixtureClient();
-        var window = new MainWindow(client);
+        var history = new LocalMonitorHistoryRow(
+            "a1b2c3d4", "CREDIT_INCREASE", "credits",
+            DateTimeOffset.FromUnixTimeSeconds(1_800_000_000),
+            1, 2, true);
+        var window = new MainWindow(client, monitorHistory: () => new[] { history });
         Render(window, Path.Combine(output, "monitor-account-list-zh.png"));
         var commandsBefore = client.Commands.Count;
         var untouched = client.State;
@@ -171,6 +175,11 @@ internal static class Program
             "Monitor must display both quota windows independent of the home toggle.");
         Assert(texts.Contains("重置次数: 2") && texts.Contains("重置次数: 未知"),
             "Reset credits must distinguish reported quantity and UNKNOWN.");
+        Assert(texts.Any(text => text.Contains(client.State.Text("monitor_credit_increase"))),
+            "The monitor should show persisted mock event history when available.");
+        Assert(All<TextBlock>(window).Any(text => text.ToolTip is string tip &&
+            tip.Contains("a1b2c3d4") && tip.Contains(client.State.Text("monitor_mock_complete"))),
+            "Historical entries must show their mock-only delivery status.");
         var unavailable = untouched.Accounts[1] with {
             Usage = null, UsageStatus = "error", UsageError = "fixture refresh failed"
         };

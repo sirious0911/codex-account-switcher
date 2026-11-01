@@ -20,6 +20,38 @@ public sealed class LocalMonitorWorker
         directory = Path.Combine(userDataDirectory, "usage-monitor");
     }
 
+    /// <summary>Read saved mock event history for the existing Windows monitor UI.</summary>
+    public IReadOnlyList<LocalMonitorHistoryRow> ReadHistory(int maxRows = 20)
+    {
+        if (maxRows <= 0) return [];
+        lock (gate)
+        {
+            if (!Directory.Exists(directory)) return [];
+            var rows = new List<LocalMonitorHistoryRow>();
+            foreach (var accountPath in Directory.EnumerateDirectories(directory))
+            {
+                var accountReference = Path.GetFileName(accountPath);
+                if (accountReference.Length != 64 ||
+                    !accountReference.All(char.IsAsciiHexDigit)) continue;
+                try
+                {
+                    var state = MockStateStore.Read(accountPath);
+                    foreach (var ev in state.Outbox)
+                    {
+                        var delivery = state.MockDeliveries.FirstOrDefault(d => d.Key == ev.Key);
+                        rows.Add(new LocalMonitorHistoryRow(
+                            accountReference[..8], ev.Kind, ev.Lane,
+                            ev.ObservedAt, ev.OldValue, ev.NewValue,
+                            delivery?.Status == "MOCK_COMPLETE"));
+                    }
+                }
+                catch (IOException) { /* An interrupted file write is not UI history. */ }
+                catch (System.Text.Json.JsonException) { /* Malformed local history cannot hide live usage. */ }
+            }
+            return rows.OrderByDescending(x => x.ObservedAt).Take(Math.Min(maxRows, 100)).ToArray();
+        }
+    }
+
     public LocalMonitorResult Process(CodexMonitorWireSample sample)
     {
         ArgumentNullException.ThrowIfNull(sample);
@@ -86,3 +118,8 @@ public sealed record LocalMonitorResult(
     IReadOnlyList<string> MockAlertMessages,
     int UniqueEventCount,
     int CompletedMockDeliveries);
+
+public sealed record LocalMonitorHistoryRow(
+    string AccountReference, string EventKind, string Lane,
+    DateTimeOffset ObservedAt, double PreviousValue, double CurrentValue,
+    bool MockCompleted);

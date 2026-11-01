@@ -175,7 +175,8 @@ open class AccountController {
                     usageStates[id] = .loaded(usage)
                     if let observation = CodexMonitorPayloadEncoder.encode(
                         profile: account, usage: usage,
-                        planType: nil, ordinaryUsageAllowed: nil, observedAt: Date()
+                        planType: usage.planType,
+                        ordinaryUsageAllowed: usage.ordinaryUsageAllowed, observedAt: Date()
                     ) {
                         onMonitorObservation?(observation)
                     }

@@ -55,7 +55,7 @@ public partial class App : Application
             monitorWorker = new LocalMonitorWorker(dataPath);
             client.MonitorObserved += OnMonitorObserved;
             var native = new NativeSettings();
-            window = new MainWindow(client, native); MainWindow = window;
+            window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? []); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);

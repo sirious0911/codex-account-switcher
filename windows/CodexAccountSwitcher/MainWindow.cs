@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ public sealed class MainWindow : Window
 {
     private readonly IAccountClient client;
     private readonly NativeSettings native;
+    private readonly Func<IReadOnlyList<LocalMonitorHistoryRow>> history;
     private string page = "accounts";
     private AccountRow? target;
     private string? localError;
@@ -26,9 +28,11 @@ public sealed class MainWindow : Window
     private string T(string key) => State.Text(key);
     private Brush B(string key) => (Brush)FindResource(key);
 
-    public MainWindow(IAccountClient client, NativeSettings? native = null)
+    public MainWindow(IAccountClient client, NativeSettings? native = null,
+        Func<IReadOnlyList<LocalMonitorHistoryRow>>? monitorHistory = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
+        history = monitorHistory ?? (() => []);
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -267,6 +271,23 @@ public sealed class MainWindow : Window
             credits.Margin = new Thickness(0, 4, 0, 0);
             section.Children.Add(credits);
             content.Children.Add(section);
+        }
+        var historyHeading = Text(T("monitor_history"), 13, bold: true);
+        historyHeading.Margin = new Thickness(0, 12, 0, 8);
+        content.Children.Add(historyHeading);
+        var events = history();
+        if (events.Count == 0) content.Children.Add(Text(T("monitor_history_empty"), 11, muted: true));
+        foreach (var ev in events) {
+            var kind = ev.EventKind switch {
+                "CREDIT_INCREASE" => T("monitor_credit_increase"),
+                "EARLY_RECOVERY_SUSPECTED" => T("monitor_early_recovery"),
+                "SCHEDULED_RESET" => T("monitor_scheduled_reset"),
+                _ => ev.EventKind
+            };
+            var label = Text(kind + " · " + ev.ObservedAt.ToLocalTime().ToString("MM-dd HH:mm", CultureInfo.CurrentCulture), 11);
+            label.ToolTip = ev.AccountReference + " · " + T(ev.MockCompleted ? "monitor_mock_complete" : "monitor_mock_pending");
+            label.Margin = new Thickness(0, 4, 0, 0);
+            content.Children.Add(label);
         }
         content.Children.Add(Button(T("monitor_refresh"), () => _ = Run("refresh"), "\uE72C", left: true));
         body.Children.Add(content);

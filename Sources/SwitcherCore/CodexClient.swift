@@ -544,10 +544,23 @@ public struct CodexClient: AccountClient {
         case .none, .null: credits = nil
         default: throw CodexClientError.malformedResponse
         }
-        return try WeeklyUsageNormalizer.normalize(
+        let normalized = try WeeklyUsageNormalizer.normalize(
             parseWindows(result),
             resetCreditsRemaining: availableCount.flatMap { $0 >= 0 ? $0 : nil },
             resetCredits: credits
+        )
+        // These optional fields are defined by the official rate-limits response.
+        // A missing value remains UNKNOWN; the original quota calculation is unchanged.
+        let bucket = result["rateLimitsByLimitId"]?["codex"] ?? result["rateLimits"]
+        return WeeklyUsage(
+            remainingPercent: normalized.remainingPercent,
+            resetsAt: normalized.resetsAt,
+            fiveHourRemainingPercent: normalized.fiveHourRemainingPercent,
+            fiveHourResetsAt: normalized.fiveHourResetsAt,
+            resetCreditsRemaining: normalized.resetCreditsRemaining,
+            resetCredits: normalized.resetCredits,
+            planType: bucket?["planType"]?.stringValue,
+            ordinaryUsageAllowed: result["ordinaryUsageAllowed"]?.boolValue
         )
     }
 

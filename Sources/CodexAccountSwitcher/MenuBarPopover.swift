@@ -33,6 +33,8 @@ struct MenuBarPopover: View {
                     SettingsView(model: model, updater: updater) {
                         page = .accounts
                     }
+                case .monitor:
+                    monitorPage
                 case let .confirmSwitch(account):
                     SwitchConfirmationPage(
                         model: model,
@@ -134,6 +136,14 @@ struct MenuBarPopover: View {
                 .disabled(model.isMutating || updater.isInstalling)
 
                 FooterAction(
+                    title: model.text("monitor_title"),
+                    systemImage: "chart.bar.xaxis"
+                ) {
+                    page = .monitor
+                }
+                .disabled(model.isMutating)
+
+                FooterAction(
                     title: model.text("settings"),
                     systemImage: "gearshape"
                 ) {
@@ -151,6 +161,55 @@ struct MenuBarPopover: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
+        }
+    }
+
+    private var monitorPage: some View {
+        VStack(spacing: 0) {
+            PopoverHeader(title: model.text("monitor_title"),
+                          backTitle: model.text("back")) { page = .accounts }
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.text("monitor_source_hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if model.accounts.isEmpty {
+                        Text(model.text("no_accounts"))
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.accounts) { account in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(account.email ?? account.displayName)
+                                .fontWeight(.medium)
+                            if let usage = model.usageStates[account.id]?.displayedUsage {
+                                Text(model.text("five_hour") + ": " +
+                                    (usage.fiveHourRemainingPercent.map { "\($0)%" } ?? model.text("unknown")))
+                                Text(model.text("weekly") + ": \(usage.remainingPercent)%")
+                                Text(model.text("reset_credits") + ": " +
+                                    (usage.resetCreditsRemaining.map(String.init) ?? model.text("unknown")))
+                            } else {
+                                Text(model.text("usage_unavailable"))
+                            }
+                            if model.usageStates[account.id]?.refreshError != nil {
+                                Text(model.text("monitor_last_known"))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.system(size: 12))
+                        .padding(.vertical, 5)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button(model.text("monitor_refresh")) { model.refreshWeeklyUsage() }
+                    .disabled(model.isMutating)
+            }
+            .padding(10)
         }
     }
 
@@ -185,6 +244,7 @@ private enum PopoverPage {
     case accounts
     case manageAccounts
     case settings
+    case monitor
     case confirmSwitch(AccountProfile)
 }
 

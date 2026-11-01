@@ -127,6 +127,12 @@ try
         confirmed.EventKinds.SequenceEqual(new[] { "CREDIT_INCREASE" }) &&
         confirmed.MockAlertMessages.Count == 1 &&
         confirmed.UniqueEventCount == 1 && confirmed.CompletedMockDeliveries == 1);
+    var visibleHistory = worker.ReadHistory();
+    Check("local worker exposes persisted event history for the Windows UI",
+        visibleHistory.Count == 1 && visibleHistory[0].EventKind == "CREDIT_INCREASE" &&
+        visibleHistory[0].MockCompleted && visibleHistory[0].AccountReference.Length == 8);
+    Check("monitor history does not expose original account IDs",
+        visibleHistory.All(x => x.AccountReference != "provider-account-1"));
     Check("mock messages do not expose provider IDs",
         confirmed.MockAlertMessages[0].Contains("[모의 알림]") &&
         !confirmed.MockAlertMessages[0].Contains("provider-account-1"));
@@ -143,6 +149,9 @@ try
     restarted.Process(Sample(other, t0 + 60_000));
     var otherConfirmed = restarted.Process(Sample(other, t0 + 120_000));
     var accountFolders = Directory.GetDirectories(Path.Combine(temporaryRoot, "usage-monitor"));
+    Check("combined monitor history is recent-first and limited",
+        restarted.ReadHistory().Count == 2 && restarted.ReadHistory(1).Count == 1 &&
+        restarted.ReadHistory(0).Count == 0);
     Check("two accounts have separate persistent ledgers",
         otherConfirmed.EventKinds.SequenceEqual(new[] { "CREDIT_INCREASE" }) &&
         accountFolders.Length == 2);

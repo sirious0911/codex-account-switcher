@@ -24,6 +24,15 @@ jobs:
         run: |
           swift --version
           swift test
+      - name: Build unsigned local macOS app bundle (no Release publishing)
+        run: |
+          set -euo pipefail
+          ./scripts/package-local-app.sh
+          BUNDLE="$(swift build -c release --show-bin-path)/Codex Account Switcher.app"
+          test -x "$BUNDLE/Contents/MacOS/CodexAccountSwitcher"
+          /usr/bin/plutil -extract SUFeedURL raw -o - "$BUNDLE/Contents/Info.plist" |
+            grep -Fx "https://sirious0911.github.io/codex-account-switcher/updates/macos/appcast.xml"
+          codesign --verify --deep --strict "$BUNDLE"
 
   windows-dotnet:
     name: Windows WPF build and synthetic checks
@@ -35,6 +44,16 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - name: Check whether Windows Swift host can be built on this runner
+        shell: pwsh
+        run: |
+          $compiler = Get-Command swift -ErrorAction SilentlyContinue
+          if ($null -eq $compiler) {
+            Write-Host "WINDOWS_SWIFT_NOT_INSTALLED_ON_RUNNER: Swift host not verified."
+          } else {
+            swift --version
+            swift test
+          }
       - name: Build Windows native UI
         shell: pwsh
         run: dotnet build windows/CodexAccountSwitcher/CodexAccountSwitcher.csproj -c Release --nologo

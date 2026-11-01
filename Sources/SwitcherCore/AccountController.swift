@@ -73,9 +73,6 @@ open class AccountController {
             } catch {
                 showError(error)
             }
-            if settings.autoResetEnabled {
-                try await beginAutoReset(event: "resumed")
-            }
         } catch {
             showError(error)
         }
@@ -339,129 +336,24 @@ open class AccountController {
         }
     }
 
+    // Retained as a compatibility API for existing callers. Enabling is forbidden.
+    // No persisted setting, timer, event log, or provider API call is created.
     public func setAutoResetEnabled(_ enabled: Bool) async {
-        do {
-            var updated = settings
-            updated.autoResetEnabled = enabled
-            try await store.saveSettings(updated)
-            settings = updated
-            resetExpiryTask?.cancel()
-            resetExpiryTask = nil
-            autoReset = nil
-            if enabled {
-                try await beginAutoReset(event: "enabled")
-                refreshWeeklyUsage()
-            } else {
-                try await store.appendResetExpiryLog([ResetExpiryEvent(timestamp: Date(), event: "disabled")])
-            }
-        } catch {
-            stopAutoReset(error)
-        }
+        settings.autoResetEnabled = false
+        resetExpiryTask?.cancel()
+        resetExpiryTask = nil
+        autoReset = nil
+        if enabled { showError(CodexClientError.resetConsumptionDisabled) }
     }
 
-    private func beginAutoReset(event: String) async throws {
-        let history = try await store.loadResetExpiryLog()
-        guard settings.autoResetEnabled else { return }
-        try await store.appendResetExpiryLog([ResetExpiryEvent(timestamp: Date(), event: event)])
-        guard settings.autoResetEnabled else { return }
-        autoReset = AutoReset(history: history)
-    }
-
+    // Kept as an inert compatibility hook for the ordinary usage-refresh path.
     private func observeResetExpiry(profile: AccountProfile, usage: WeeklyUsage?, error: String? = nil) async {
-        guard settings.autoResetEnabled, var experiment = autoReset else { return }
-        let events = experiment.observe(profile: profile, usage: usage, error: error, at: Date())
-        autoReset = experiment
-        do {
-            try await store.appendResetExpiryLog(events)
-            var latestUsage = usage
-            for checkpoint in events where checkpoint.decision == "attempt" {
-                guard settings.autoResetEnabled, autoReset?.generation == experiment.generation,
-                      !Task.isCancelled else { return }
-                guard let creditID = checkpoint.creditID, let expiry = checkpoint.expiresAt,
-                      expiry > Date(),
-                      latestUsage?.resetCredits?.contains(where: { $0.id == creditID && $0.status == "available" }) == true
-                else { continue }
-                let key = UUID().uuidString
-                let attempt = ResetExpiryEvent(resetAttempted: true, timestamp: Date(), event: "reset_attempt",
-                    profileID: profile.id, account: profile.displayName, usage: latestUsage,
-                    creditID: creditID, expiresAt: expiry, checkpointMinutes: checkpoint.checkpointMinutes,
-                    scheduledAt: checkpoint.scheduledAt, idempotencyKey: key)
-                // Persist the attempt before the network mutation. An interrupted attempt is never replayed.
-                try await store.appendResetExpiryLog([attempt])
-                autoReset?.recordAttempt(attempt)
-                var result = ResetExpiryEvent(resetAttempted: true, timestamp: Date(), event: "reset_result",
-                    profileID: profile.id, account: profile.displayName, creditID: creditID,
-                    expiresAt: expiry, checkpointMinutes: checkpoint.checkpointMinutes, idempotencyKey: key)
-                let home = await store.profileHome(id: profile.id)
-                do {
-                    try Task.checkCancellation()
-                    guard settings.autoResetEnabled, autoReset?.generation == experiment.generation else { return }
-                    result.outcome = try await codex.consumeResetCredit(profileHome: home, creditID: creditID, idempotencyKey: key)
-                } catch {
-                    result.timestamp = Date()
-                    result.error = error.localizedDescription
-                    do { try await store.appendResetExpiryLog([result]) }
-                    catch { throw AutoResetError(message: "\(result.error!) Log write failed: \(error.localizedDescription)") }
-                    showError(AutoResetError(message: "\(profile.displayName) · \(creditID): \(error.localizedDescription)"))
-                    return
-                }
-                result.timestamp = Date()
-                try await store.appendResetExpiryLog([result])
-                autoReset?.recordAttempt(result)
-                guard result.outcome != .nothingToReset else { continue }
-                var readback: WeeklyUsage?
-                do {
-                    let refreshed = try await codex.readWeeklyUsage(profileHome: home)
-                    readback = refreshed
-                    if result.outcome == .reset {
-                        guard let credits = refreshed.resetCredits,
-                              !credits.contains(where: { $0.id == creditID && $0.status == "available" }) else {
-                            throw AutoResetError(message: "\(profile.displayName) · \(creditID): reset returned success, but the usage read did not confirm credit consumption.")
-                        }
-                    }
-                } catch {
-                    let message = error.localizedDescription
-                    do {
-                        try await store.appendResetExpiryLog([ResetExpiryEvent(timestamp: Date(), event: "reset_verification_failed",
-                            profileID: profile.id, account: profile.displayName, usage: readback, error: message,
-                            creditID: creditID, expiresAt: expiry, idempotencyKey: key, outcome: result.outcome)])
-                    } catch { throw AutoResetError(message: "\(message) Log write failed: \(error.localizedDescription)") }
-                    throw error
-                }
-                guard let refreshed = readback else { throw CodexClientError.malformedResponse }
-                latestUsage = refreshed
-                autoReset?.updateUsage(refreshed, profileID: profile.id)
-                try await store.appendResetExpiryLog([ResetExpiryEvent(timestamp: Date(), event: "reset_verified",
-                    profileID: profile.id, account: profile.displayName, usage: refreshed,
-                    creditID: creditID, expiresAt: expiry, idempotencyKey: key, outcome: result.outcome)])
-                usageStates[profile.id] = .loaded(refreshed)
-                try await store.cacheWeeklyUsage(refreshed, profileID: profile.id)
-            }
-        } catch {
-            stopAutoReset(error)
-        }
+        // Automatic reset-credit use is unavailable in this fork.
     }
 
     private func scheduleResetExpiryCheck() {
         resetExpiryTask?.cancel()
         resetExpiryTask = nil
-        guard isBackgroundUsageRefreshEnabled, settings.autoResetEnabled,
-              let date = autoReset?.nextCheckpoint(accountIDs: Set(accounts.map(\.id))) else { return }
-        let delay = max(0, date.timeIntervalSinceNow)
-        resetExpiryTask = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(delay)) }
-            catch { return }
-            guard !Task.isCancelled, let self else { return }
-            self.resetExpiryTask = nil
-            self.refreshWeeklyUsage()
-        }
-    }
-
-    private func stopAutoReset(_ error: any Error) {
-        resetExpiryTask?.cancel()
-        resetExpiryTask = nil
-        autoReset = nil
-        showError(error)
     }
 
     public func dismissError() {

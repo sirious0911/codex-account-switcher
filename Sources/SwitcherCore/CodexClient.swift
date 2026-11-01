@@ -552,18 +552,9 @@ public struct CodexClient: AccountClient {
     }
 
     public func consumeResetCredit(profileHome: URL, creditID: String, idempotencyKey: String) async throws -> ResetCreditOutcome {
-        let result = try await withSession(profileHome: profileHome) { session in
-            try await session.request(
-                method: "account/rateLimitResetCredit/consume", id: 1,
-                params: ["creditId": creditID, "idempotencyKey": idempotencyKey],
-                timeout: requestTimeout
-            )
-        }
-        guard let value = result["outcome"]?.stringValue,
-              let outcome = ResetCreditOutcome(rawValue: value) else {
-            throw CodexClientError.malformedResponse
-        }
-        return outcome
+        // Hard stop before app-server process creation or RPC transmission.
+        // The protocol method remains for fixture/source compatibility only.
+        throw CodexClientError.resetConsumptionDisabled
     }
 
     public func login(profileHome: URL) async throws -> AccountIdentity {

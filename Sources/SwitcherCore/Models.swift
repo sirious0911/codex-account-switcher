@@ -75,7 +75,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.showsMenuBarPercentage = showsMenuBarPercentage
         self.showsFiveHourUsage = showsFiveHourUsage
         self.statusBarUsageWindow = statusBarUsageWindow
-        self.autoResetEnabled = autoResetEnabled
+        // Automatic reset-credit consumption is prohibited in this fork.
+        self.autoResetEnabled = false
     }
 
     public init(from decoder: any Decoder) throws {
@@ -93,9 +94,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
             StatusBarUsageWindow.self,
             forKey: .statusBarUsageWindow
         ) ?? .fiveHour
-        autoResetEnabled = try container.decodeIfPresent(
-            Bool.self, forKey: .autoResetEnabled
-        ) ?? false
+        // Ignore any previously persisted 'true' value. Never resume redemption.
+        autoResetEnabled = false
     }
 }
 
@@ -272,6 +272,7 @@ public enum CodexClientError: LocalizedError, Equatable, Sendable {
     case timeout
     case identityUnavailable
     case weeklyUsageUnavailable
+    case resetConsumptionDisabled
     case loginFailed(String)
 
     public var errorDescription: String? {
@@ -294,6 +295,8 @@ public enum CodexClientError: LocalizedError, Equatable, Sendable {
             "Codex did not return an account identity."
         case .weeklyUsageUnavailable:
             "No weekly Codex Usage window is available."
+        case .resetConsumptionDisabled:
+            "Reset-credit consumption is disabled in this fork."
         case let .loginFailed(message):
             "Codex login failed: \(message)"
         }

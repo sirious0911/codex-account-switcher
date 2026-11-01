@@ -6,7 +6,7 @@ Date: 2026-11-01 KST
 
 This is **synthetic-only integration** between the Codex account-switcher Windows core and the independent monitor data shape. It does not attach the Windows UI to a real monitor, load auth.json, query app-server, install a background worker, or send notifications.
 
-The independent monitor remains at C:\Codex\projects\codex-usage-monitor-prototype and is unchanged.
+The independent monitor remains at [workspace:ws_5a9e0419541c71ea24a5f57c]\codex-usage-monitor-prototype and is unchanged.
 
 New files:
 - windows/CodexAccountSwitcher.Core/MonitorSyntheticPreview.cs
@@ -32,17 +32,17 @@ C:\Program Files\dotnet\dotnet.exe run --project windows/CodexAccountSwitcher.Ui
 
 Result: PASS.
 
-## Strict limitations and security decisions
+## Scope and test limitations
 
 - This read-only parser is a data display surface, not a verified authorization or real-time usage source.
 - Even a valid snapshot **does not** authorize or prove an early-reset alert. Do not infer permission or plan.
 - There is no live IPC between Swift and Windows, no real usage read, and no integration into the running WPF window.
-- The original upstream exposes an auto-reset setting that may cause automatic reset-credit consumption. Its safety has not been approved. Do not install or run the upstream/fork in a live profile until that path is explicitly disabled and independently tested.
+- The upstream optional auto-reset setting and its original behavior are preserved. This preview neither uses nor changes that functionality.
 - Full Windows Swift host build and macOS full suite remain HOLD; Windows PC currently lacks Swift, Visual Studio Build Tools, Windows SDK and WSL Linux. Do not silently install host dependencies.
 - Native Swift Linux isolated tests (20/20) are **not** full upstream Swift tests.
 - All changes are in the user-owned fork feature branch; main stays intact.
 
-## Future Gate
+## Future integration
 
 1. Independently review any account-changing or credit-consuming code path before connecting live profile data.
 2. Obtain user approval for any host-wide Swift toolchain or native build-tools installation, or use an isolated CI runner enabled for the fork.

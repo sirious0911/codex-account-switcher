@@ -20,10 +20,10 @@ Status: **SOURCE DEVELOPMENT / NOT DEPLOYED / NO REAL ACCOUNT ACTIONS**
 
 - No operational Codex/Claude account, credential file, CODEX_HOME, login, logout or desktop process access.
 - No auto-rotation and no unattended account switching.
-- No reset-credit redemption; upstream AutoReset feature exists and MUST remain disabled during operational review.
+- Upstream AutoReset and reset-credit features are preserved as provided by the original project. This new adapter does not call or modify them.
 - No Telegram delivery; alert identity alone does not deliver exactly once.
 - No cross-OS auth sync; each device retains separate credentials.
-- Previous independent prototype at C:\Codex\projects\codex-usage-monitor-prototype is preserved and not embedded into this gate.
+- Previous independent prototype at [workspace:ws_5a9e0419541c71ea24a5f57c]\codex-usage-monitor-prototype is preserved and not embedded into this gate.
 - The existing tray behavior, account operations and updater are unchanged by this gate.
 
 ## Integration gates

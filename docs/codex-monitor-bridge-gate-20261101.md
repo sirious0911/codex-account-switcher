@@ -5,7 +5,7 @@ Date: 2026-11-01 KST
 SOURCE_EXACT2_CREATED; ISOLATED_SWIFT_20_OF_20_PASS; WINDOWS_SWIFT_FULL_SUITE_NOT_RUN; LIVE_NO_GO.
 
 ## Design
-- Keep the existing independent monitor implementation and tests at C:\Codex\projects\codex-usage-monitor-prototype unchanged.
+- Keep the existing independent monitor implementation and tests at [workspace:ws_5a9e0419541c71ea24a5f57c]\codex-usage-monitor-prototype unchanged.
 - The new CodexMonitorPayloadEncoder.swift serializes the existing Codex AccountProfile/WeeklyUsage into the monitor's normalizeSynthetic(raw, observedAtMs) input schema.
 - This is a pure in-process data transformation: no Swift subprocess, HTTP, filesystem access, CLI execution, Telegram sending or account switching.
 - The event detector and Telegram mock-outbox stay in the existing Node/.NET monitor until an explicit integration and ownership Gate. Do not create a second event detector.
@@ -31,4 +31,4 @@ SOURCE_EXACT2_CREATED; ISOLATED_SWIFT_20_OF_20_PASS; WINDOWS_SWIFT_FULL_SUITE_NO
 5. Independent security/compatibility review and separate approval before real Codex app-server usage and any Telegram delivery.
 6. Preserve two distinct Telegram channels/bots: Monitor Bot and Alert Bot. Both are HOLD here.
 
-Do not automatically switch accounts, redeem reset credits, install/deploy binaries, sync auth files, merge main, or schedule real Telegram transmission in this Gate.
+This adapter does not call account switching or reset-credit consumption. The original project's optional features remain available and unchanged. No binary installation, main merge, or real Telegram transmission was performed in this development.

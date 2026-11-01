@@ -31,7 +31,7 @@ Desktop is located from the `OpenAI.Codex` Store manifest (its executable can be
 | Accounts, settings and usage cache | `%LOCALAPPDATA%\Codex Account Switcher\` |
 | Saved credentials | `accounts\<uuid>\auth.json` below that directory |
 | Active Codex home | `CODEX_HOME`, otherwise `%USERPROFILE%\.codex` |
-| Bundled Swift runtime cache | `%LOCALAPPDATA%\Codex Account Switcher Runtime\<payload-hash>\` |
+| Bundled Swift runtime cache | `%LOCALAPPDATA%\Codex Account Switcher Personal Runtime\<payload-hash>\` |
 
 Both Desktop and Switcher must use the same active Codex home. Saved file credentials are protected by a current-user ACL. Windows credential writes use a private temporary file, flush and same-directory replacement. Symbolic links and junctions in credential paths are rejected. Settings and startup integration remain local.
 

@@ -6,7 +6,7 @@ import SwitcherCore
 @MainActor
 final class TiboForecastModel: ObservableObject {
     private static let logger = Logger(
-        subsystem: "com.liuzhao.codex-account-switcher", category: "TiboForecast"
+        subsystem: "com.sirious0911.codex-account-switcher", category: "TiboForecast"
     )
     @Published private(set) var forecast: TiboResetForecast?
     @Published private(set) var isLoading = false

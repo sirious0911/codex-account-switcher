@@ -36,7 +36,7 @@ if (platform === 'darwin') {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', target]);
 } else {
   assert.equal(await fileHash(target), await releaseChecksum(latest.downloadBase, asset));
-  const script = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Add-Type -Path ./npm/lib/windows-shortcut.cs; $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Account Switcher.lnk'; [SwitcherShortcut]::Read($link)";
+  const script = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Add-Type -Path ./npm/lib/windows-shortcut.cs; $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Account Switcher Personal.lnk'; [SwitcherShortcut]::Read($link)";
   const actual = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]);
   assert.equal(actual.toLowerCase(), target.toLowerCase());
 }

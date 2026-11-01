@@ -37,7 +37,7 @@ final class AppModel: AccountController, @MainActor ObservableObject {
     @Published private(set) var monitorHistory: [MacMonitorLedger.HistoryEntry] = []
     private let monitorLedger = MacMonitorLedger(directory:
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Codex Account Switcher/usage-monitor"))
+            .appending(path: "Codex Account Switcher Personal/usage-monitor"))
 
     override init(store: AccountStore, codex: any AccountClient, switchService: any SwitchServicing) {
         super.init(store: store, codex: codex, switchService: switchService)

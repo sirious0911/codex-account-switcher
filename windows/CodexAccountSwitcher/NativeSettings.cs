@@ -11,14 +11,14 @@ namespace CodexAccountSwitcher;
 
 public sealed class NativeSettings
 {
-    private const string Key = @"Software\CodexAccountSwitcher";
+    private const string Key = @"Software\Sirious0911\CodexAccountSwitcher";
     private const string Run = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public string Version => typeof(NativeSettings).Assembly.GetName().Version!.ToString(3);
     public bool LaunchAtLogin {
-        get { using var key = Registry.CurrentUser.OpenSubKey(Run); return key?.GetValue("CodexAccountSwitcher") is string; }
+        get { using var key = Registry.CurrentUser.OpenSubKey(Run); return key?.GetValue("CodexAccountSwitcherPersonal") is string; }
         set { using var key = Registry.CurrentUser.CreateSubKey(Run);
-            if (value) key.SetValue("CodexAccountSwitcher", "\"" + Environment.ProcessPath + "\" --background");
-            else key.DeleteValue("CodexAccountSwitcher", false); }
+            if (value) key.SetValue("CodexAccountSwitcherPersonal", "\"" + Environment.ProcessPath + "\" --background");
+            else key.DeleteValue("CodexAccountSwitcherPersonal", false); }
     }
     public bool AutomaticallyCheckUpdates {
         get { using var key = Registry.CurrentUser.OpenSubKey(Key); return key?.GetValue("AutomaticallyCheckUpdates") is not int number || number != 0; }

@@ -29,11 +29,13 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/package-local-app.sh
-          app="$(swift build -c release --show-bin-path)/Codex Account Switcher.app"
+          app="$(swift build -c release --show-bin-path)/Codex Account Switcher Personal.app"
           test -x "$app/Contents/MacOS/CodexAccountSwitcher"
           /usr/bin/codesign --verify --deep --strict "$app"
           /usr/bin/plutil -extract SUFeedURL raw -o - "$app/Contents/Info.plist" |
             grep -Fx "https://sirious0911.github.io/codex-account-switcher/updates/macos/appcast.xml"
+          /usr/bin/plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist" |
+            grep -Fx "com.sirious0911.codex-account-switcher"
           test -f "$app/Contents/Resources/LICENSE.txt"
           mkdir -p .build/preview
           /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" .build/preview/Codex-Account-Switcher-macos-adhoc-preview.zip

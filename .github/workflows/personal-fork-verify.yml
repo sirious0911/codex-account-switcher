@@ -1,0 +1,61 @@
+name: Personal Fork Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: "Personal fork branch or commit SHA to verify"
+        required: true
+        type: string
+        default: feature/provider-extensibility
+
+permissions:
+  contents: read
+
+jobs:
+  swift-macos:
+    name: macOS Swift full test suite
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref }}
+      - name: Swift version and full suite
+        run: |
+          swift --version
+          swift test
+
+  windows-dotnet:
+    name: Windows WPF build and synthetic checks
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build Windows native UI
+        shell: pwsh
+        run: dotnet build windows/CodexAccountSwitcher/CodexAccountSwitcher.csproj -c Release --nologo
+      - name: Synthetic native UI checks
+        shell: pwsh
+        run: dotnet run --project windows/CodexAccountSwitcher.UiChecks -c Release
+      - name: Synthetic monitor checks
+        shell: pwsh
+        run: dotnet run --project windows/CodexAccountSwitcher.MonitorChecks -c Release
+
+  node-checks:
+    name: Node and site regression
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ inputs.target_ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Node regression
+        run: node --test scripts/tests/*.test.mjs
+      - name: Local site links
+        run: node scripts/check-site-geo.mjs

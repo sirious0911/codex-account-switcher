@@ -199,6 +199,33 @@ struct MenuBarPopover: View {
                         .font(.system(size: 12))
                         .padding(.vertical, 5)
                     }
+                    Divider()
+                    Text(model.text("monitor_history"))
+                        .font(.system(size: 12, weight: .semibold))
+                    if model.monitorHistory.isEmpty {
+                        Text(model.text("monitor_history_empty"))
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.monitorHistory) { entry in
+                        let title = switch entry.kind {
+                        case "CREDIT_INCREASE": model.text("monitor_credit_increase")
+                        case "EARLY_RECOVERY_SUSPECTED": model.text("monitor_early_recovery")
+                        case "SCHEDULED_RESET": model.text("monitor_scheduled_reset")
+                        default: entry.kind
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.system(size: 11, weight: .medium))
+                            Text(Date(timeIntervalSince1970:
+                                Double(entry.observedAtMilliseconds) / 1_000)
+                                .formatted(date: .abbreviated, time: .shortened))
+                            Text(model.text(entry.mockCompleted
+                                ? "monitor_mock_complete" : "monitor_mock_pending"))
+                        }
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 3)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(14)

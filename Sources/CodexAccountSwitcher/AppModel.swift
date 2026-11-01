@@ -34,10 +34,25 @@ enum LaunchAtLoginState: Equatable {
 final class AppModel: AccountController, @MainActor ObservableObject {
     let objectWillChange = ObservableObjectPublisher()
     @Published private(set) var launchAtLoginState: LaunchAtLoginState = .disabled
+    @Published private(set) var monitorHistory: [MacMonitorLedger.HistoryEntry] = []
+    private let monitorLedger = MacMonitorLedger(directory:
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appending(path: "Codex Account Switcher/usage-monitor"))
 
     override init(store: AccountStore, codex: any AccountClient, switchService: any SwitchServicing) {
         super.init(store: store, codex: codex, switchService: switchService)
         onChange = { [weak self] in self?.objectWillChange.send() }
+        monitorHistory = monitorLedger.history()
+        onMonitorObservation = { [weak self] observation in
+            guard let self else { return }
+            do {
+                try self.monitorLedger.record(observation)
+                self.monitorHistory = self.monitorLedger.history()
+            } catch {
+                // Monitoring is supplementary and must not interrupt account switching.
+                self.monitorHistory = self.monitorLedger.history()
+            }
+        }
         refreshLaunchAtLoginStatus()
     }
 

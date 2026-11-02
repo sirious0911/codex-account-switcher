@@ -21,6 +21,8 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
     public event Action? Changed;
     /// Successful fresh quota samples from Swift, independent from cached UI snapshots.
     public event Action<CodexMonitorWireSample>? MonitorObserved;
+    /// Signals before a real switch command is sent, so the minibar clears immediately.
+    public event Action? SwitchRequested;
 
     public CoreClient(string hostPath, string dataPath, string? activeHome = null)
     {
@@ -44,7 +46,10 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
 
     public Task InitializeAsync() => SendAsync(new { command = "initialize" });
     public Task CommandAsync(string command, Guid? accountID = null, bool? value = null, string? language = null)
-        => SendAsync(new { command, accountID, value, language });
+    {
+        if (command == "switch") SwitchRequested?.Invoke();
+        return SendAsync(new { command, accountID, value, language });
+    }
 
     private async Task SendAsync(object command)
     {

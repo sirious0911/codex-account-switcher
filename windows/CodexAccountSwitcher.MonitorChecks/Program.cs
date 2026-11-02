@@ -175,4 +175,6 @@ try
 }
 finally { if (Directory.Exists(temporaryRoot)) Directory.Delete(temporaryRoot, recursive: true); }
 
+await SwitcherLocalPipeSenderTests.RunAsync(Check);
+
 Console.WriteLine($"MONITOR_SYNTHETIC_PREVIEW_PASS checks={checks} realCodexReads=0 actualAccountSwitches=0 telegramSends=0");

@@ -123,7 +123,7 @@ private final class Host {
 
     private func sendMonitorObservation(_ observation: CodexMonitorObservation) {
         guard let raw = try? JSONSerialization.jsonObject(with: observation.jsonData) as? [String: Any] else { return }
-        send(["kind": "monitorObservation", "observedAtMs": observation.observedAtMilliseconds, "raw": raw])
+        send(["kind": "monitorObservation", "profileID": observation.profileID.uuidString, "observedAtMs": observation.observedAtMilliseconds, "raw": raw])
     }
 
     private func sendSnapshot() {

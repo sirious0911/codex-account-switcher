@@ -31,6 +31,16 @@ final class CodexMonitorPayloadEncoderTests: XCTestCase {
         XCTAssertEqual(credits["availableCount"] as? Int, 2)
     }
 
+    func testLocalProfileUUIDIsOnlyInHostMetadataNotInRawProviderPayload() throws {
+        let current = profile()
+        let result = try XCTUnwrap(CodexMonitorPayloadEncoder.encode(
+            profile: current, usage: usage(), planType: "plus",
+            ordinaryUsageAllowed: true, observedAt: observed))
+        XCTAssertEqual(result.profileID, current.id)
+        let rawText = try XCTUnwrap(String(data: result.jsonData, encoding: .utf8))
+        XCTAssertFalse(rawText.contains(current.id.uuidString))
+    }
+
     func testUnknownProviderPlanAndPermissionStayUnknown() throws {
         let result = try XCTUnwrap(CodexMonitorPayloadEncoder.encode(profile: profile(), usage: usage(), planType: nil, ordinaryUsageAllowed: nil, observedAt: observed))
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: result.jsonData) as? [String: Any])

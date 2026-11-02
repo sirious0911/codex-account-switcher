@@ -34,6 +34,8 @@ public partial class App : Application
     private int? trayIconPercent;
     private CoreClient? client;
     private LocalMonitorWorker? monitorWorker;
+    private SwitcherLocalPipeSender? monitorPipeSender;
+    private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
     private MainWindow? window;
     private DispatcherTimer? updates;
     private bool exiting;
@@ -53,7 +55,9 @@ public partial class App : Application
             ApplyTheme();
             client = new CoreClient(HostRuntime.Resolve(Assembly.GetExecutingAssembly()), dataPath);
             monitorWorker = new LocalMonitorWorker(dataPath);
+            monitorPipeSender = new SwitcherLocalPipeSender();
             client.MonitorObserved += OnMonitorObserved;
+            client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
             window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? []); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
@@ -74,7 +78,7 @@ public partial class App : Application
             tray.MouseClick += (_, args) => {
                 if (args.Button == Forms.MouseButtons.Left) { ApplyTheme(); window.OpenWindow(); }
             };
-            client.Changed += RefreshTray;
+            client.Changed += OnClientChanged;
             await client.InitializeAsync();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
@@ -95,6 +99,22 @@ public partial class App : Application
             // interfere with the original account-switching UI.
             System.Diagnostics.Trace.TraceWarning("Local monitor persistence failed: " + ex.GetType().Name);
         }
+        // The local monitor still receives every profile. Only the active,
+        // confirmed profile is eligible for the independent taskbar IPC.
+        if (externalMonitorGate.Allows(sample)) monitorPipeSender?.Publish(sample);
+    }
+
+    private void OnClientChanged()
+    {
+        if (client != null && externalMonitorGate.Observe(client.State))
+            monitorPipeSender?.Invalidate();
+        RefreshTray();
+    }
+
+    private void OnSwitchRequested()
+    {
+        externalMonitorGate.SwitchRequested();
+        monitorPipeSender?.Invalidate();
     }
 
     private void RefreshTray()
@@ -160,9 +180,11 @@ public partial class App : Application
         activationListener?.Unregister(null);
         if (client != null) {
             client.MonitorObserved -= OnMonitorObserved;
-            client.Changed -= RefreshTray;
+            client.Changed -= OnClientChanged;
+            client.SwitchRequested -= OnSwitchRequested;
             await client.DisposeAsync();
         }
+        if (monitorPipeSender != null) await monitorPipeSender.DisposeAsync();
         window?.CloseForExit();
         Shutdown();
     }

@@ -3,6 +3,8 @@ import Foundation
 /// A sanitized, synthetic-compatible observation for the separate usage monitor.
 /// No process, file, credential, network or Telegram access occurs in this layer.
 public struct CodexMonitorObservation: Sendable {
+    /// Local profile UUID for selection only; not sent through the external pipe.
+    public let profileID: UUID
     public let observedAtMilliseconds: Int64
     public let jsonData: Data
 }
@@ -77,7 +79,7 @@ public enum CodexMonitorPayloadEncoder {
         guard JSONSerialization.isValidJSONObject(payload),
               let json = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
         else { return nil }
-        return CodexMonitorObservation(observedAtMilliseconds: observedMillis, jsonData: json)
+        return CodexMonitorObservation(profileID: profile.id, observedAtMilliseconds: observedMillis, jsonData: json)
     }
 
     private static func epochSeconds(_ date: Date) -> Int64? {

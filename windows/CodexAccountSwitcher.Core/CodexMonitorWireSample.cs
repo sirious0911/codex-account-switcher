@@ -7,7 +7,7 @@ namespace CodexAccountSwitcher.Core;
 /// It includes the provider account identifier and quota counters, never auth tokens.
 /// No background process, network transport, or Telegram call is made here.
 /// </summary>
-public sealed record CodexMonitorWireSample(long ObservedAtMilliseconds, string RawJson)
+public sealed record CodexMonitorWireSample(long ObservedAtMilliseconds, string RawJson, Guid? ProfileID = null)
 {
     public static bool TryParse(JsonElement message, out CodexMonitorWireSample? sample)
     {
@@ -24,9 +24,16 @@ public sealed record CodexMonitorWireSample(long ObservedAtMilliseconds, string 
             raw.ValueKind != JsonValueKind.Object)
             return false;
 
+        Guid? profileID = null;
+        if (message.TryGetProperty("profileID", out var profileElement))
+        {
+            if (profileElement.ValueKind != JsonValueKind.String ||
+                !Guid.TryParse(profileElement.GetString(), out var id)) return false;
+            profileID = id;
+        }
         var json = raw.GetRawText();
         if (!MonitorSyntheticPreview.TryRead(json, out _)) return false;
-        sample = new CodexMonitorWireSample(observedAtMs, json);
+        sample = new CodexMonitorWireSample(observedAtMs, json, profileID);
         return true;
     }
 }

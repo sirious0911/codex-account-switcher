@@ -75,5 +75,24 @@ internal static class IntegratedMiniBarStateTests
             state.Read(t.AddMinutes(4)).Status == MiniBarDisplayStatus.Invalidated);
         check("stale source frame fails closed",
             !state.TryApply(Sample(0), t.AddMinutes(7)));
+
+        // A malformed frame must not erase the source-identity guard.
+        // The old standalone IPC receiver pins its source identity until
+        // disconnect; preserve that property for the integrated window.
+        var strict = new IntegratedMiniBarState();
+        check("identity guard baseline accepted",
+            strict.TryApply(Sample(), t));
+        check("malformed observation invalidates counters",
+            !strict.TryApply(Sample(10_000, "{"), t.AddSeconds(10)) &&
+            strict.Read(t.AddSeconds(10)).FiveHourRemaining == null);
+        check("new provider after malformed frame is not considered the same account",
+            !strict.TryApply(Sample(20_000, raw.Replace("fixture-a", "fixture-b")),
+                t.AddSeconds(20)) &&
+            strict.Read(t.AddSeconds(20)).FiveHourRemaining == null);
+        check("mixed provider after invalid data stays blocked",
+            !strict.TryApply(Sample(30_000), t.AddSeconds(30)));
+        strict.Invalidate(t.AddSeconds(30));
+        check("verified selection reset permits newer observation",
+            strict.TryApply(Sample(30_001), t.AddSeconds(30).AddMilliseconds(1)));
     }
 }

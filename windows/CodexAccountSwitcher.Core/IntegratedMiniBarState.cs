@@ -41,6 +41,19 @@ public sealed class IntegratedMiniBarState
         mixedSource = false;
     }
 
+    // Only an authenticated active-profile gate transition may reset the
+    // source-identity latch. Bad samples merely clear the display; they
+    // must not make the next provider identity look like a new epoch.
+    private void RejectObservation(DateTimeOffset now)
+    {
+        snapshot = null;
+        observedAt = null;
+        lastSourceMilliseconds = null;
+        minimumSourceMilliseconds = Math.Max(minimumSourceMilliseconds,
+            now.ToUnixTimeMilliseconds());
+        invalidated = true;
+    }
+
     public bool TryApply(CodexMonitorWireSample sample, DateTimeOffset now)
     {
         if (mixedSource) return false;
@@ -48,14 +61,14 @@ public sealed class IntegratedMiniBarState
             (parsed.FiveHourRemaining is null &&
              parsed.WeeklyRemaining is null && parsed.CreditsRemaining is null))
         {
-            Invalidate(now);
+            RejectObservation(now);
             return false;
         }
         DateTimeOffset timestamp;
         try { timestamp = DateTimeOffset.FromUnixTimeMilliseconds(sample.ObservedAtMilliseconds); }
         catch (ArgumentOutOfRangeException)
         {
-            Invalidate(now);
+            RejectObservation(now);
             return false;
         }
         // Old queued frames and future timestamps cannot reinstate usage
@@ -63,7 +76,7 @@ public sealed class IntegratedMiniBarState
         if (sample.ObservedAtMilliseconds <= minimumSourceMilliseconds ||
             timestamp > now.AddSeconds(30) || now - timestamp >= DisplayFor)
         {
-            Invalidate(now);
+            RejectObservation(now);
             return false;
         }
         if (lastSourceMilliseconds is long last && sample.ObservedAtMilliseconds <= last)
@@ -79,13 +92,13 @@ public sealed class IntegratedMiniBarState
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException)
         {
-            Invalidate(now);
+            RejectObservation(now);
             return false;
         }
         if (sourceAccount is string existing &&
             !string.Equals(existing, id, StringComparison.Ordinal))
         {
-            Invalidate(now);
+            RejectObservation(now);
             mixedSource = true;
             return false;
         }

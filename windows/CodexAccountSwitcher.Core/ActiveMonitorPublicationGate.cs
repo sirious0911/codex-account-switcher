@@ -32,8 +32,11 @@ public sealed class ActiveMonitorPublicationGate
             if (sawSwitchMutation && !snapshot.IsMutating) switchPending = false;
         }
 
+        // Host transport errors leave the last snapshot's active identity intact.
+        // Fail closed so a terminated SwiftHost cannot leave stale quota visible.
         Guid? next = !switchPending && !snapshot.IsMutating &&
-            snapshot.ActiveIdentityConfirmed ? snapshot.ActiveAccountID : null;
+            snapshot.ActiveIdentityConfirmed && string.IsNullOrEmpty(snapshot.Error)
+            ? snapshot.ActiveAccountID : null;
         var changed = next != activeProfile;
         activeProfile = next;
         return changed;

@@ -80,8 +80,9 @@ internal static class SwitcherLocalPipeSenderTests
         // The source selection is independent of the switcher's multi-profile refresh.
         var activeA = Guid.Parse("11111111-1111-1111-1111-111111111111");
         var activeB = Guid.Parse("22222222-2222-2222-2222-222222222222");
-        static AccountSnapshot State(Guid? id, bool confirmed = true, bool mutating = false) =>
-            new([], id, new(), mutating, false, confirmed, null, new Dictionary<string, string>());
+        static AccountSnapshot State(Guid? id, bool confirmed = true, bool mutating = false,
+            string? error = null) =>
+            new([], id, new(), mutating, false, confirmed, error, new Dictionary<string, string>());
         var gate = new ActiveMonitorPublicationGate();
         var sampleA = new CodexMonitorWireSample(now, ValidRaw, activeA);
         var sampleB = new CodexMonitorWireSample(now + 1, ValidRaw, activeB);
@@ -92,6 +93,14 @@ internal static class SwitcherLocalPipeSenderTests
             !gate.Allows(new CodexMonitorWireSample(now, ValidRaw)));
         check("repeated snapshot with same active profile preserves IPC epoch",
             !gate.Observe(State(activeA)) && gate.Allows(sampleA));
+        check("SwiftHost transport failure immediately invalidates prior account",
+            gate.Observe(State(activeA, error: "Core transport stopped")) &&
+            !gate.Allows(sampleA) && gate.ActiveProfile is null);
+        check("persistent host error cannot re-enable the old IPC sender",
+            !gate.Observe(State(activeA, error: "Core transport stopped")) &&
+            !gate.Allows(sampleA));
+        check("healthy new snapshot can restore a verified IPC epoch",
+            gate.Observe(State(activeA)) && gate.Allows(sampleA));
         gate.SwitchRequested();
         check("switch request immediately invalidates A before host confirmation",
             !gate.Allows(sampleA));

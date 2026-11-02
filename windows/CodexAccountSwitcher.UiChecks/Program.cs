@@ -62,6 +62,36 @@ internal static class Program
                     mini.LastDock.ActualRectInsideWorkArea);
             }
             else Console.WriteLine("SKIP: native dock skipped for undersized CI work area.");
+            var physicalScreens = System.Windows.Forms.Screen.AllScreens;
+            Console.WriteLine("INFO: physical display count=" + physicalScreens.Length);
+            var selectorMenu = mini.ContextMenu!.Items.OfType<MenuItem>().First(item =>
+                (string?)item.Header == "표시 모니터 선택");
+            Assert(selectorMenu.Items.Count == physicalScreens.Length,
+                "The integrated minibar monitor menu must enumerate the actual connected screens.");
+            foreach (var screen in physicalScreens)
+            {
+                var selectable = selectorMenu.Items.OfType<MenuItem>().Single(item =>
+                    ((string)item.Header).StartsWith(screen.DeviceName,
+                        StringComparison.Ordinal));
+                selectable.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                var selectedDock = mini.LastDock ??
+                    throw new Exception("The monitor menu must re-run native docking on selection.");
+                if (selectedDock.Placement.FitsInsideWorkArea)
+                {
+                    Assert(selectedDock.Success && selectedDock.ActualRectInsideWorkArea,
+                        "Each usable monitor must report a verified physical WPF window rectangle.");
+                    double windowWidthPx = Math.Round(mini.Width * selectedDock.TargetDpi / 96.0);
+                    double windowHeightPx = Math.Round(mini.Height * selectedDock.TargetDpi / 96.0);
+                    Assert(selectedDock.PixelLeft >= screen.WorkingArea.Left - 2 &&
+                        selectedDock.PixelTop >= screen.WorkingArea.Top - 2 &&
+                        selectedDock.PixelLeft + windowWidthPx <= screen.WorkingArea.Right + 2 &&
+                        selectedDock.PixelTop + windowHeightPx <= screen.WorkingArea.Bottom + 2,
+                        "Window coordinates must stay within the selected physical monitor work area.");
+                    Console.WriteLine("PASS: native monitor selection, targetDpi=" +
+                        selectedDock.TargetDpi + ", work-area verified");
+                }
+                else Console.WriteLine("SKIP: selected monitor work area too small for minibar.");
+            }
             var uiNow = DateTimeOffset.UtcNow;
             const string miniRaw = """
                 {"accountId":"ui-fixture","ordinaryUsageAllowed":null,

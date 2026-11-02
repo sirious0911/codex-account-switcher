@@ -57,6 +57,12 @@ public sealed class IntegratedMiniBarState
     public bool TryApply(CodexMonitorWireSample sample, DateTimeOffset now)
     {
         if (mixedSource) return false;
+        // Drop queued, duplicate and out-of-order frames WITHOUT invalidating
+        // a later, already-accepted observation from the current active epoch.
+        if (sample.ObservedAtMilliseconds <= minimumSourceMilliseconds ||
+            (lastSourceMilliseconds is long last &&
+             sample.ObservedAtMilliseconds <= last))
+            return false;
         if (!MonitorSyntheticPreview.TryRead(sample.RawJson, out var parsed) || parsed == null ||
             (parsed.FiveHourRemaining is null &&
              parsed.WeeklyRemaining is null && parsed.CreditsRemaining is null))
@@ -73,14 +79,11 @@ public sealed class IntegratedMiniBarState
         }
         // Old queued frames and future timestamps cannot reinstate usage
         // after a switch, host restart, or display expiration.
-        if (sample.ObservedAtMilliseconds <= minimumSourceMilliseconds ||
-            timestamp > now.AddSeconds(30) || now - timestamp >= DisplayFor)
+        if (timestamp > now.AddSeconds(30) || now - timestamp >= DisplayFor)
         {
             RejectObservation(now);
             return false;
         }
-        if (lastSourceMilliseconds is long last && sample.ObservedAtMilliseconds <= last)
-            return false;
 
         // Compare the source-provided identity only in volatile process memory.
         // Neither the identity nor its hash is shown or logged.

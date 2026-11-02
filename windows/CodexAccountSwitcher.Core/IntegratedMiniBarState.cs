@@ -26,6 +26,9 @@ public sealed class IntegratedMiniBarState
     private string? sourceAccount;
     private long minimumSourceMilliseconds;
     private bool invalidated;
+    // A mixed provider identity remains blocked for this active selection epoch.
+    // Only an external active-profile gate transition can clear this latch.
+    private bool mixedSource;
 
     public void Invalidate(DateTimeOffset now)
     {
@@ -35,10 +38,12 @@ public sealed class IntegratedMiniBarState
         sourceAccount = null;
         minimumSourceMilliseconds = Math.Max(minimumSourceMilliseconds, now.ToUnixTimeMilliseconds());
         invalidated = true;
+        mixedSource = false;
     }
 
     public bool TryApply(CodexMonitorWireSample sample, DateTimeOffset now)
     {
+        if (mixedSource) return false;
         if (!MonitorSyntheticPreview.TryRead(sample.RawJson, out var parsed) || parsed == null ||
             (parsed.FiveHourRemaining is null &&
              parsed.WeeklyRemaining is null && parsed.CreditsRemaining is null))
@@ -81,6 +86,7 @@ public sealed class IntegratedMiniBarState
             !string.Equals(existing, id, StringComparison.Ordinal))
         {
             Invalidate(now);
+            mixedSource = true;
             return false;
         }
         sourceAccount = id;

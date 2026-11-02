@@ -47,15 +47,24 @@ internal static class IntegratedMiniBarStateTests
             state.Read(t.AddMinutes(2)).ResetCreditsAvailable == null);
         check("post-invalidation older replay remains rejected",
             !state.TryApply(Sample(60_000), t.AddMinutes(2)));
-        check("new account observation must be newer than invalidation",
-            state.TryApply(Sample(180_000), t.AddMinutes(3)));
-        state.Invalidate(t.AddMinutes(3));
-        check("account switch clears values synchronously",
+        check("mixed profile remains blocked even when later frames are fresh",
+            !state.TryApply(Sample(180_000, raw.Replace("fixture-a", "fixture-b")),
+                t.AddMinutes(3)) &&
+            !state.TryApply(Sample(180_000), t.AddMinutes(3)) &&
             state.Read(t.AddMinutes(3)).FiveHourRemaining == null);
+        // A verified active-profile epoch change is the only way to reset the
+        // mixed source latch; this cannot happen from a sender observation.
+        state.Invalidate(t.AddMinutes(3));
+        check("explicit active-profile epoch reset accepts a newer sample",
+            state.TryApply(Sample(180_001, raw.Replace("fixture-a", "fixture-b")),
+                t.AddMinutes(3).AddMilliseconds(1)));
+        state.Invalidate(t.AddMinutes(3).AddMilliseconds(1));
+        check("account switch clears values synchronously",
+            state.Read(t.AddMinutes(3).AddMilliseconds(1)).FiveHourRemaining == null);
         check("old queued frame cannot repopulate after switch",
-            !state.TryApply(Sample(180_000), t.AddMinutes(3)));
+            !state.TryApply(Sample(180_001), t.AddMinutes(3).AddMilliseconds(1)));
         check("post-switch new source observation can repopulate",
-            state.TryApply(Sample(180_001), t.AddMinutes(3).AddMilliseconds(1)));
+            state.TryApply(Sample(180_002), t.AddMinutes(3).AddMilliseconds(2)));
         check("empty usage invalidates not zero",
             !state.TryApply(Sample(240_000, raw.Replace("\"availableCount\":0", "\"availableCount\":null")
                 .Replace("\"usedPercent\":25", "\"usedPercent\":null")

@@ -49,6 +49,19 @@ internal static class Program
             Assert(mini.DisplayFrame.FiveHourRemaining == null,
                 "No synthetic or cached usage must appear before the first active sample.");
             Render(mini, Path.Combine(output, "integrated-minibar-unknown.png"));
+            Assert(mini.LastDock is not null,
+                "Integrated WPF must invoke native window placement on initialization.");
+            if (mini.LastDock!.Placement.FitsInsideWorkArea)
+            {
+                Assert(mini.LastDock.Success &&
+                    mini.LastDock.ActualRectInsideWorkArea &&
+                    mini.LastDock.TargetDpi >= 96,
+                    "Native placement must verify actual window rectangle and target monitor DPI.");
+                Console.WriteLine("PASS: integrated native dock targetDpi=" +
+                    mini.LastDock.TargetDpi + ", physicalRectInside=" +
+                    mini.LastDock.ActualRectInsideWorkArea);
+            }
+            else Console.WriteLine("SKIP: native dock skipped for undersized CI work area.");
             var uiNow = DateTimeOffset.UtcNow;
             const string miniRaw = """
                 {"accountId":"ui-fixture","ordinaryUsageAllowed":null,

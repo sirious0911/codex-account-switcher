@@ -31,6 +31,8 @@ internal sealed class IntegratedMiniBarWindow : Window
     private bool closingForExit;
 
     internal MiniBarReadout DisplayFrame => state.Read(DateTimeOffset.UtcNow);
+    // Read-only native placement receipt for offline GUI validation.
+    internal NativeDockResult? LastDock { get; private set; }
 
     internal IntegratedMiniBarWindow(Action openMainWindow)
     {
@@ -238,6 +240,7 @@ internal sealed class IntegratedMiniBarWindow : Window
         if (hwndSource?.CompositionTarget is null || FormsScreen.AllScreens.Length == 0)
             return;
         var result = NativeDesktopDock.TryDock(hwndSource.Handle, SelectedScreen, Width, Height);
+        LastDock = result;
         if (!result.Success) Topmost = false;
     }
 

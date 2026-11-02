@@ -115,5 +115,35 @@ internal static class IntegratedMiniBarGateTransitionTests
             !display.Read(t.AddMilliseconds(71)).AccountVerified &&
             !display.Read(t.AddMilliseconds(71)).EventsAllowed &&
             !display.Read(t.AddMilliseconds(71)).TelegramAllowed);
+
+        // Return to original A in a second confirmed switch epoch.
+        RequestSwitch(80);
+        Observe(Snapshot(b), 81);
+        check("B-to-A request must clear B before host starts mutating",
+            display.Read(t.AddMilliseconds(81)).FiveHourRemaining is null &&
+            !Deliver(Sample(b, "source-b", 0, 81), 81));
+        Observe(Snapshot(b, mutating: true), 82);
+        Observe(Snapshot(a), 85);
+        check("A-only restored after B-to-A switch completes",
+            Deliver(Sample(a, "source-a", 10, 86), 86) &&
+            display.Read(t.AddMilliseconds(86)).FiveHourRemaining == 90);
+        check("late B observation cannot repaint restored A",
+            !Deliver(Sample(b, "source-b", 0, 87), 87) &&
+            display.Read(t.AddMilliseconds(87)).FiveHourRemaining == 90);
+
+        // A switch error may retain the original profile; only a healthy
+        // post-error snapshot may reopen the read-only display.
+        RequestSwitch(100);
+        Observe(Snapshot(a, mutating: true), 102);
+        Observe(Snapshot(a, error: "target validation failed"), 105);
+        check("failed target switch does not restore stale A usage",
+            display.Read(t.AddMilliseconds(105)).FiveHourRemaining is null &&
+            !Deliver(Sample(a, "source-a", 1, 106), 106));
+        Observe(Snapshot(a), 110);
+        check("A reload after failure accepts fresh data only",
+            !Deliver(Sample(a, "source-a", 0, 105), 111) &&
+            Deliver(Sample(a, "source-a", 15, 111), 111) &&
+            display.Read(t.AddMilliseconds(111)).FiveHourRemaining == 85);
+
     }
 }

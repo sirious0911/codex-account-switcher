@@ -39,6 +39,46 @@ internal static class Program
             Directory.CreateDirectory(output);
             var app = new App(false); app.InitializeComponent();
             var client = new FixtureClient();
+
+            // The new in-app minibar is shown by the SAME tray owner. No
+            // Codex runtime, Named Pipe listener or account login is used.
+            var mini = new IntegratedMiniBarWindow(() => {});
+            Assert(!mini.ShowInTaskbar && !mini.Topmost &&
+                Math.Abs(mini.Width - 360) < 0.1 && Math.Abs(mini.Height - 52) < 0.1,
+                "The integrated minibar must be 360x52 DIP, borderless and taskbar-adjacent.");
+            Assert(mini.DisplayFrame.FiveHourRemaining == null,
+                "No synthetic or cached usage must appear before the first active sample.");
+            Render(mini, Path.Combine(output, "integrated-minibar-unknown.png"));
+            var uiNow = DateTimeOffset.UtcNow;
+            const string miniRaw = """
+                {"accountId":"ui-fixture","ordinaryUsageAllowed":null,
+                 "rateLimitsByLimitId":{"codex":{"planType":null,
+                   "primary":{"usedPercent":15,"windowDurationMins":300},
+                   "secondary":{"usedPercent":38,"windowDurationMins":10080}}},
+                 "rateLimitResetCredits":{"availableCount":2}}
+                """;
+            mini.Accept(new CodexMonitorWireSample(uiNow.ToUnixTimeMilliseconds(), miniRaw));
+            var miniFrame = mini.DisplayFrame;
+            Assert(miniFrame.FiveHourRemaining == 85 && miniFrame.WeeklyRemaining == 62 &&
+                miniFrame.ResetCreditsAvailable == 2 && !miniFrame.AccountVerified &&
+                !miniFrame.EventsAllowed && !miniFrame.TelegramAllowed,
+                "In-app WPF should render all three fresh quota values without trusting account identity.");
+            Assert(mini.ToolTip is string freshTip && freshTip.Contains("계정 미확인") &&
+                freshTip.Contains("5H 잔여: 85%") && freshTip.Contains("리셋권: 2"),
+                "Integrated UI must explain source uncertainty and quota details.");
+            Render(mini, Path.Combine(output, "integrated-minibar-fresh.png"));
+            mini.Invalidate();
+            Assert(mini.DisplayFrame.FiveHourRemaining == null &&
+                mini.DisplayFrame.ResetCreditsAvailable == null &&
+                mini.ToolTip is string staleTip && staleTip.Contains("UNKNOWN"),
+                "Account switch or host failure must immediately clear the visible quota values.");
+            Render(mini, Path.Combine(output, "integrated-minibar-invalidated.png"));
+            mini.Hide();
+            Assert(!mini.IsVisible, "Integrated minibar must hide without exiting the account application.");
+            mini.ShowFromTray();
+            Assert(mini.IsVisible, "Existing tray can reopen the same minibar window.");
+            mini.CloseForExit();
+
             var window = new MainWindow(client);
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)

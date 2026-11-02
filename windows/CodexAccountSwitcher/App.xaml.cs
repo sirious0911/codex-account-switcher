@@ -34,9 +34,11 @@ public partial class App : Application
     private int? trayIconPercent;
     private CoreClient? client;
     private LocalMonitorWorker? monitorWorker;
-    private SwitcherLocalPipeSender? monitorPipeSender;
+    // The active-only gate is shared with the offline-verified legacy IPC contract.
+    // Normal runtime now paints a single in-process window; no pipe is opened.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
     private MainWindow? window;
+    private IntegratedMiniBarWindow? minibar;
     private DispatcherTimer? updates;
     private bool exiting;
 
@@ -55,11 +57,11 @@ public partial class App : Application
             ApplyTheme();
             client = new CoreClient(HostRuntime.Resolve(Assembly.GetExecutingAssembly()), dataPath);
             monitorWorker = new LocalMonitorWorker(dataPath);
-            monitorPipeSender = new SwitcherLocalPipeSender();
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
             window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? []); MainWindow = window;
+            minibar = new IntegratedMiniBarWindow(() => { ApplyTheme(); window.OpenWindow(); });
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -70,16 +72,28 @@ public partial class App : Application
             trayMenu = new Forms.ContextMenuStrip();
             var openItem = new Forms.ToolStripMenuItem("Codex Account Switcher Personal");
             openItem.Click += (_, _) => { ApplyTheme(); window.OpenWindow(); };
+            var minibarItem = new Forms.ToolStripMenuItem("사용량 미니바 표시");
+            minibarItem.Click += (_, _) => {
+                if (minibar == null) return;
+                if (minibar.IsVisible) minibar.Hide(); else minibar.ShowFromTray();
+            };
             var quitItem = new Forms.ToolStripMenuItem();
             quitItem.Click += (_, _) => _ = QuitAsync();
-            trayMenu.Items.Add(openItem); trayMenu.Items.Add(new Forms.ToolStripSeparator()); trayMenu.Items.Add(quitItem);
-            trayMenu.Opening += (_, _) => { quitItem.Text = client.State.Text("quit"); quitItem.Enabled = !window.IsBusy; };
+            trayMenu.Items.Add(openItem);
+            trayMenu.Items.Add(minibarItem);
+            trayMenu.Items.Add(new Forms.ToolStripSeparator());
+            trayMenu.Items.Add(quitItem);
+            trayMenu.Opening += (_, _) => {
+                quitItem.Text = client.State.Text("quit"); quitItem.Enabled = !window.IsBusy;
+                minibarItem.Text = minibar?.IsVisible == true ? "사용량 미니바 숨기기" : "사용량 미니바 표시";
+            };
             tray.ContextMenuStrip = trayMenu;
             tray.MouseClick += (_, args) => {
                 if (args.Button == Forms.MouseButtons.Left) { ApplyTheme(); window.OpenWindow(); }
             };
             client.Changed += OnClientChanged;
             await client.InitializeAsync();
+            minibar?.Show();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
@@ -101,20 +115,28 @@ public partial class App : Application
         }
         // The local monitor still receives every profile. Only the active,
         // confirmed profile is eligible for the independent taskbar IPC.
-        if (externalMonitorGate.Allows(sample)) monitorPipeSender?.Publish(sample);
+        if (!externalMonitorGate.Allows(sample)) return;
+        if (Dispatcher.CheckAccess()) minibar?.Accept(sample);
+        else Dispatcher.BeginInvoke(new Action(() => {
+            // Source selection must be rechecked after deferred UI dispatch.
+            if (externalMonitorGate.Allows(sample)) minibar?.Accept(sample);
+        }));
     }
 
     private void OnClientChanged()
     {
-        if (client != null && externalMonitorGate.Observe(client.State))
-            monitorPipeSender?.Invalidate();
+        if (client != null && externalMonitorGate.Observe(client.State)) {
+            if (Dispatcher.CheckAccess()) minibar?.Invalidate();
+            else Dispatcher.BeginInvoke(new Action(() => minibar?.Invalidate()));
+        }
         RefreshTray();
     }
 
     private void OnSwitchRequested()
     {
         externalMonitorGate.SwitchRequested();
-        monitorPipeSender?.Invalidate();
+        if (Dispatcher.CheckAccess()) minibar?.Invalidate();
+        else Dispatcher.BeginInvoke(new Action(() => minibar?.Invalidate()));
     }
 
     private void RefreshTray()
@@ -184,7 +206,7 @@ public partial class App : Application
             client.SwitchRequested -= OnSwitchRequested;
             await client.DisposeAsync();
         }
-        if (monitorPipeSender != null) await monitorPipeSender.DisposeAsync();
+        minibar?.CloseForExit();
         window?.CloseForExit();
         Shutdown();
     }

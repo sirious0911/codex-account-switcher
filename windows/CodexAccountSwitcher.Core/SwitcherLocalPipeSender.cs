@@ -55,7 +55,7 @@ public sealed class SwitcherLocalPipeSender : IAsyncDisposable
         Interlocked.Exchange(ref lastObservedAt, now);
         while (pending.Reader.TryRead(out _)) { }
         // Wake the channel reader even when it is idle and no future usage arrives.
-        pending.Writer.TryWrite(new ObservationFrame(0, nextGeneration, null));
+        pending.Writer.TryWrite(new ObservationFrame(0, nextGeneration - 1, null));
         Interlocked.Exchange(ref currentConnection, null)?.Dispose();
     }
 
@@ -114,15 +114,31 @@ public sealed class SwitcherLocalPipeSender : IAsyncDisposable
         {
             try
             {
+                // Bind the connection to the publication epoch at creation.
+                // A later Invalidate() must not send any frame through this pipe.
+                var connectionGeneration = Interlocked.Read(ref generation);
                 await using var pipe = new NamedPipeClientStream(
                     ".", pipeName, PipeDirection.Out, PipeOptions.Asynchronous);
                 Interlocked.Exchange(ref currentConnection, pipe);
                 try
                 {
                     await pipe.ConnectAsync(500, ct).ConfigureAwait(false);
+                    if (connectionGeneration != Interlocked.Read(ref generation)) continue;
                     while (!ct.IsCancellationRequested)
                     {
                         var frame = await pending.Reader.ReadAsync(ct).ConfigureAwait(false);
+                        if (frame.Generation != connectionGeneration)
+                        {
+                            // A previous epoch's wake-up marker can still be queued
+                            // when the new receiver connects. It must not close it.
+                            if (frame.Generation < connectionGeneration) continue;
+                            // The old receiver is obsolete. Preserve at most one
+                            // fresh new-epoch frame for the replacement connection.
+                            if (frame.Bytes is not null &&
+                                frame.Generation == Interlocked.Read(ref generation))
+                                pending.Writer.TryWrite(frame);
+                            break;
+                        }
                         if (frame.Bytes is null) break;
                         // A disconnected/replaced generation must never replay queued values.
                         if (frame.Generation != Interlocked.Read(ref generation) ||

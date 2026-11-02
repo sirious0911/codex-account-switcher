@@ -179,27 +179,28 @@ internal sealed class IntegratedMiniBarWindow : Window
                   "\n—: 미조회 또는 제공되지 않음";
     }
 
-    private FormsScreen SelectedScreen
+    // Preserve a single enumeration snapshot throughout monitor selection.
+    // Windows can re-enumerate screens while an external display is unplugged.
+    internal FormsScreen? SelectScreen(FormsScreen[] screens)
     {
-        get {
-            var all = FormsScreen.AllScreens;
-            var id = MiniBarScreenSelector.Select(preferredScreen,
-                all.Select(s => new MiniBarScreenInfo(s.DeviceName, s.Primary)).ToArray());
-            return all.First(s => string.Equals(
-                s.DeviceName, id, StringComparison.OrdinalIgnoreCase));
-        }
+        var id = MiniBarScreenSelector.Select(preferredScreen,
+            screens.Select(s => new MiniBarScreenInfo(s.DeviceName, s.Primary)).ToArray());
+        return id == null ? null : screens.FirstOrDefault(s => string.Equals(
+            s.DeviceName, id, StringComparison.OrdinalIgnoreCase));
     }
 
     private void BuildMenu()
     {
         menu.Items.Clear();
         var screens = new MenuItem { Header = "표시 모니터 선택" };
-        foreach (var screen in FormsScreen.AllScreens) {
+        var available = FormsScreen.AllScreens;
+        var selected = SelectScreen(available);
+        foreach (var screen in available) {
             var name = screen.DeviceName;
             var item = new MenuItem {
                 Header = name + (screen.Primary ? " (기본)" : ""),
                 IsCheckable = true,
-                IsChecked = string.Equals(name, SelectedScreen.DeviceName,
+                IsChecked = string.Equals(name, selected?.DeviceName,
                     StringComparison.OrdinalIgnoreCase)
             };
             item.Click += (_, _) => {
@@ -237,9 +238,16 @@ internal sealed class IntegratedMiniBarWindow : Window
 
     private void Dock()
     {
-        if (hwndSource?.CompositionTarget is null || FormsScreen.AllScreens.Length == 0)
+        if (hwndSource?.CompositionTarget is null)
             return;
-        var result = NativeDesktopDock.TryDock(hwndSource.Handle, SelectedScreen, Width, Height);
+        var available = FormsScreen.AllScreens;
+        var selected = SelectScreen(available);
+        if (selected is null)
+        {
+            LastDock = null;
+            return;
+        }
+        var result = NativeDesktopDock.TryDock(hwndSource.Handle, selected, Width, Height);
         LastDock = result;
         if (!result.Success) Topmost = false;
     }
@@ -252,7 +260,6 @@ internal sealed class IntegratedMiniBarWindow : Window
         const int WM_DPICHANGED = 0x02E0;
         if (msg is WM_DISPLAYCHANGE or WM_SETTINGCHANGE or WM_DPICHANGED)
             Dispatcher.BeginInvoke(new Action(() => {
-                if (FormsScreen.AllScreens.Length == 0) return;
                 BuildMenu();
                 if (positionLocked) Dock();
             }), DispatcherPriority.ContextIdle);

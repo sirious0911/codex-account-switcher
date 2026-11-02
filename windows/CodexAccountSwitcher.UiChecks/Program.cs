@@ -64,6 +64,11 @@ internal static class Program
             else Console.WriteLine("SKIP: native dock skipped for undersized CI work area.");
             var physicalScreens = System.Windows.Forms.Screen.AllScreens;
             Console.WriteLine("INFO: physical display count=" + physicalScreens.Length);
+            Assert(mini.SelectScreen(Array.Empty<System.Windows.Forms.Screen>()) is null,
+                "Transient zero-display re-enumeration must return no target, not throw.");
+            if (physicalScreens.Length != 0)
+                Assert(mini.SelectScreen(physicalScreens) != null,
+                    "A stable connected display snapshot must resolve a docking target.");
             var selectorMenu = mini.ContextMenu!.Items.OfType<MenuItem>().First(item =>
                 (string?)item.Header == "표시 모니터 선택");
             Assert(selectorMenu.Items.Count == physicalScreens.Length,

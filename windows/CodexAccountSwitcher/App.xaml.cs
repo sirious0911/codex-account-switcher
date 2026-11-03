@@ -1,5 +1,4 @@
 using System;
-using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -26,19 +25,14 @@ public partial class App : Application
     private bool ownsMutex;
     private EventWaitHandle? activateWindow;
     private RegisteredWaitHandle? activationListener;
-    private Forms.NotifyIcon? tray;
     private Forms.ContextMenuStrip? trayMenu;
-    private Icon? icon;
-    private string? trayIconVariant;
-    private System.Drawing.Size trayIconSize;
-    private int? trayIconPercent;
+    private TrayQuotaIcons? quotaTray;
     private CoreClient? client;
     private LocalMonitorWorker? monitorWorker;
-    // The active-only gate is shared with the offline-verified legacy IPC contract.
-    // Normal runtime now paints a single in-process window; no pipe is opened.
+    // Only the confirmed active profile feeds native notification-area icons.
+    // No floating minibar window, secondary process or IPC listener is created.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
     private MainWindow? window;
-    private IntegratedMiniBarWindow? minibar;
     private DispatcherTimer? updates;
     private bool exiting;
 
@@ -61,39 +55,25 @@ public partial class App : Application
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
             window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? []); MainWindow = window;
-            minibar = new IntegratedMiniBarWindow(() => { ApplyTheme(); window.OpenWindow(); });
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
-            tray = new Forms.NotifyIcon { Text = "Codex Account Switcher Personal" };
-            RefreshTrayIcon();
-            tray.Visible = true;
-            SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             trayMenu = new Forms.ContextMenuStrip();
             var openItem = new Forms.ToolStripMenuItem("Codex Account Switcher Personal");
             openItem.Click += (_, _) => { ApplyTheme(); window.OpenWindow(); };
-            var minibarItem = new Forms.ToolStripMenuItem("사용량 미니바 표시");
-            minibarItem.Click += (_, _) => {
-                if (minibar == null) return;
-                if (minibar.IsVisible) minibar.Hide(); else minibar.ShowFromTray();
-            };
             var quitItem = new Forms.ToolStripMenuItem();
             quitItem.Click += (_, _) => _ = QuitAsync();
             trayMenu.Items.Add(openItem);
-            trayMenu.Items.Add(minibarItem);
             trayMenu.Items.Add(new Forms.ToolStripSeparator());
             trayMenu.Items.Add(quitItem);
             trayMenu.Opening += (_, _) => {
-                quitItem.Text = client.State.Text("quit"); quitItem.Enabled = !window.IsBusy;
-                minibarItem.Text = minibar?.IsVisible == true ? "사용량 미니바 숨기기" : "사용량 미니바 표시";
+                quitItem.Text = client.State.Text("quit");
+                quitItem.Enabled = !window.IsBusy;
             };
-            tray.ContextMenuStrip = trayMenu;
-            tray.MouseClick += (_, args) => {
-                if (args.Button == Forms.MouseButtons.Left) { ApplyTheme(); window.OpenWindow(); }
-            };
+            quotaTray = new TrayQuotaIcons(trayMenu, () => { ApplyTheme(); window.OpenWindow(); });
+            SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             client.Changed += OnClientChanged;
             await client.InitializeAsync();
-            minibar?.Show();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
@@ -113,69 +93,36 @@ public partial class App : Application
             // interfere with the original account-switching UI.
             System.Diagnostics.Trace.TraceWarning("Local monitor persistence failed: " + ex.GetType().Name);
         }
-        // The local monitor still receives every profile. Only the active,
-        // confirmed profile is eligible for the independent taskbar IPC.
+        // The local worker receives all profiles. Only confirmed active-profile
+        // observations may update the native taskbar notification icons.
         if (!externalMonitorGate.Allows(sample)) return;
-        if (Dispatcher.CheckAccess()) minibar?.Accept(sample);
+        if (Dispatcher.CheckAccess()) quotaTray?.Accept(sample);
         else Dispatcher.BeginInvoke(new Action(() => {
             // Source selection must be rechecked after deferred UI dispatch.
-            if (externalMonitorGate.Allows(sample)) minibar?.Accept(sample);
+            if (externalMonitorGate.Allows(sample)) quotaTray?.Accept(sample);
         }));
     }
 
     private void OnClientChanged()
     {
         if (client != null && externalMonitorGate.Observe(client.State)) {
-            if (Dispatcher.CheckAccess()) minibar?.Invalidate();
-            else Dispatcher.BeginInvoke(new Action(() => minibar?.Invalidate()));
+            if (Dispatcher.CheckAccess()) quotaTray?.Invalidate();
+            else Dispatcher.BeginInvoke(new Action(() => quotaTray?.Invalidate()));
         }
-        RefreshTray();
+        quotaTray?.Refresh();
     }
 
     private void OnSwitchRequested()
     {
         externalMonitorGate.SwitchRequested();
-        if (Dispatcher.CheckAccess()) minibar?.Invalidate();
-        else Dispatcher.BeginInvoke(new Action(() => minibar?.Invalidate()));
+        if (Dispatcher.CheckAccess()) quotaTray?.Invalidate();
+        else Dispatcher.BeginInvoke(new Action(() => quotaTray?.Invalidate()));
     }
 
-    private void RefreshTray()
-    {
-        if (client == null || tray == null) return;
-        RefreshTrayIcon();
-        var active = client.State.Accounts.FirstOrDefault(row => row.Profile.Id == client.State.ActiveAccountID);
-        var percent = ActiveTrayPercent();
-        var label = active == null ? "Codex Account Switcher Personal" : active.Profile.DisplayName + (percent != null ? " · " + percent + "%" : "");
-        tray.Text = label.Length > 63 ? label[..63] : label;
-    }
-    private int? ActiveTrayPercent() => client is null
-        ? null : TrayUsageProjection.ActivePercent(client.State);
-    private void RefreshTrayIcon()
-    {
-        if (tray == null) return;
-        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-        // Taskbar appearance can differ from the application's light/dark theme.
-        var variant = key?.GetValue("SystemUsesLightTheme") is int light && light != 0 ? "light" : "dark";
-        var size = Forms.SystemInformation.SmallIconSize;
-        var percent = ActiveTrayPercent();
-        if (trayIconVariant == variant && trayIconSize == size && trayIconPercent == percent) return;
-        Icon replacement;
-        if (percent is { } value) {
-            replacement = TrayUsageIcon.Create(value, variant == "light", size);
-        } else {
-            var uri = new Uri($"pack://application:,,,/Codex-Account-Switcher-windows-x64;component/tray-{variant}.ico");
-            using var resource = GetResourceStream(uri).Stream;
-            using var original = new Icon(resource, size);
-            replacement = (Icon)original.Clone();
-        }
-        tray.Icon = replacement;
-        icon?.Dispose(); icon = replacement;
-        trayIconVariant = variant; trayIconSize = size; trayIconPercent = percent;
-    }
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
         if (Dispatcher.HasShutdownStarted) return;
-        Dispatcher.BeginInvoke(new Action(() => { if (!exiting) RefreshTrayIcon(); }));
+        Dispatcher.BeginInvoke(new Action(() => { if (!exiting) quotaTray?.Refresh(force: true); }));
     }
     private static bool IsDark() {
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
@@ -198,7 +145,6 @@ public partial class App : Application
             client.SwitchRequested -= OnSwitchRequested;
             await client.DisposeAsync();
         }
-        minibar?.CloseForExit();
         window?.CloseForExit();
         Shutdown();
     }
@@ -235,9 +181,8 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e) {
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-        if (tray != null) { tray.Visible = false; tray.Dispose(); }
+        quotaTray?.Dispose();
         trayMenu?.Dispose();
-        icon?.Dispose();
         activateWindow?.Dispose();
         if (ownsMutex) instance?.ReleaseMutex(); instance?.Dispose();
         base.OnExit(e);

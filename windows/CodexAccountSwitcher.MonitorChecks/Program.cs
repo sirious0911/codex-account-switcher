@@ -113,6 +113,46 @@ Check("disabled tray percentage leaves icon unnumbered",
 Check("missing active account leaves tray unnumbered",
     TrayUsageProjection.ActivePercent(live with { ActiveAccountID = otherID }) is null);
 
+// Three native notification-area metrics share one active-only in-memory stream.
+// UNKNOWN must not be displayed as zero, and never borrow another metric.
+var freshQuota = TrayQuotaReadout.From(new MiniBarReadout(
+    MiniBarDisplayStatus.FreshUnbound, 85, 62, 2, resetTime));
+Check("native notification area has three independent fresh values",
+    freshQuota.FiveHourIcon == "85" && freshQuota.WeeklyIcon == "62" &&
+    freshQuota.CreditsIcon == "2");
+Check("native icon tooltip identifies each value and its unverified source",
+    freshQuota.FiveHourTooltip.Contains("5H: 85%") &&
+    freshQuota.WeeklyTooltip.Contains("7D: 62%") &&
+    freshQuota.CreditsTooltip.Contains("리셋권: 2") &&
+    freshQuota.WeeklyTooltip.Contains("계정 미확인"));
+var incompleteQuota = TrayQuotaReadout.From(new MiniBarReadout(
+    MiniBarDisplayStatus.FreshUnbound, null, 70, null, resetTime));
+Check("missing five-hour quota never borrows available weekly percent",
+    incompleteQuota.FiveHourIcon == "?" && incompleteQuota.WeeklyIcon == "70");
+Check("missing reset credits remain unknown not zero",
+    incompleteQuota.CreditsIcon == "?" &&
+    incompleteQuota.CreditsTooltip.Contains("UNKNOWN"));
+var zeroQuota = TrayQuotaReadout.From(new MiniBarReadout(
+    MiniBarDisplayStatus.FreshUnbound, 0, 0, 0, resetTime));
+Check("actual exhausted 5H 7D and reset credits show zero",
+    zeroQuota.FiveHourIcon == "0" && zeroQuota.WeeklyIcon == "0" &&
+    zeroQuota.CreditsIcon == "0");
+var agedQuota = TrayQuotaReadout.From(new MiniBarReadout(
+    MiniBarDisplayStatus.AgedUnbound, 50, 40, 1, resetTime));
+Check("aging marks native tooltip delayed without inventing new percent",
+    agedQuota.FiveHourIcon == "50" && agedQuota.WeeklyTooltip.Contains("지연"));
+var invalidQuota = TrayQuotaReadout.From(new MiniBarReadout(
+    MiniBarDisplayStatus.Invalidated, 50, 40, 1, resetTime));
+Check("active switch invalidates all three native icon values",
+    invalidQuota.FiveHourIcon == "?" && invalidQuota.WeeklyIcon == "?" &&
+    invalidQuota.CreditsIcon == "?");
+var expiredQuota = TrayQuotaReadout.From(new MiniBarReadout(
+    MiniBarDisplayStatus.Unknown, 50, 40, 1, resetTime));
+Check("expired quota does not leak old values through taskbar icons",
+    expiredQuota.FiveHourIcon == "?" && expiredQuota.WeeklyIcon == "?" &&
+    expiredQuota.CreditsIcon == "?" &&
+    expiredQuota.WeeklyTooltip.Contains("미조회/만료"));
+
 using (var wire = JsonDocument.Parse("{\"kind\":\"monitorObservation\",\"observedAtMs\":1800000000000,\"raw\":" + valid + "}"))
 {
     Check("Swift wire observation parses as a Windows monitor sample",

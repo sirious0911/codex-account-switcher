@@ -38,6 +38,24 @@ internal static class Program
             Assert(NativeSettings.LatestWindowsVersion(macOnly.RootElement) == null, "A release without a Windows EXE must never prompt a Windows update.");
             Directory.CreateDirectory(output);
             var app = new App(false); app.InitializeComponent();
+            var appFields = typeof(App).GetFields(
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic);
+            Assert(appFields.Any(f => f.FieldType == typeof(TrayQuotaIcons)) &&
+                !appFields.Any(f => f.FieldType == typeof(IntegratedMiniBarWindow)),
+                "Normal app startup must own native tray quota icons, not a floating minibar.");
+            var iconSize = new System.Drawing.Size(16, 16);
+            using (var fiveIcon = TrayUsageIcon.CreateMetric("5H", "85", false,
+                iconSize, MiniBarDisplayStatus.FreshUnbound))
+            using (var weeklyIcon = TrayUsageIcon.CreateMetric("7D", "62", false,
+                iconSize, MiniBarDisplayStatus.FreshUnbound))
+            using (var resetIcon = TrayUsageIcon.CreateMetric("R", "?", true,
+                iconSize, MiniBarDisplayStatus.Unknown))
+            {
+                Assert(fiveIcon.Width == 16 && weeklyIcon.Height == 16 &&
+                    resetIcon.Width == 16,
+                    "Three compact native metric icon drawings must be available.");
+            }
             var client = new FixtureClient();
 
             // The new in-app minibar is shown by the SAME tray owner. No

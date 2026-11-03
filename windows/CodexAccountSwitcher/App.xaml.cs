@@ -148,16 +148,8 @@ public partial class App : Application
         var label = active == null ? "Codex Account Switcher Personal" : active.Profile.DisplayName + (percent != null ? " · " + percent + "%" : "");
         tray.Text = label.Length > 63 ? label[..63] : label;
     }
-    private int? ActiveTrayPercent()
-    {
-        if (client?.State.Settings.ShowsMenuBarPercentage != true) return null;
-        var state = client.State;
-        var usage = state.Accounts.FirstOrDefault(row => row.Profile.Id == state.ActiveAccountID)?.Usage;
-        if (usage == null) return null;
-        return state.Settings.StatusBarUsageWindow == "fiveHour"
-            ? usage.FiveHourRemainingPercent ?? usage.RemainingPercent
-            : usage.RemainingPercent;
-    }
+    private int? ActiveTrayPercent() => client is null
+        ? null : TrayUsageProjection.ActivePercent(client.State);
     private void RefreshTrayIcon()
     {
         if (tray == null) return;

@@ -83,6 +83,36 @@ Check("empty account set produces empty monitor", MonitorOverview.From(AccountSn
 Check("monitor projections never mutate account snapshot", live.Accounts[0].Usage!.ResetCreditsRemaining == 0 &&
     live.Accounts[1].Usage is null && live.ActiveAccountID == accountID);
 
+// Free/partial-plan regression: a configured 5H badge must never silently
+// substitute a 7D percentage when five-hour quota is absent.
+var freeLike = live with {
+    Accounts = [new(new(accountID, "Free Fixture", null), "F",
+        new(72, resetTime, null, null, null), null)]
+};
+Check("free-like missing 5H shows no numeric tray badge",
+    TrayUsageProjection.ActivePercent(freeLike) is null);
+Check("free-like 7D selection shows the real weekly value",
+    TrayUsageProjection.ActivePercent(freeLike with {
+        Settings = freeLike.Settings with { StatusBarUsageWindow = "weekly" }
+    }) == 72);
+Check("actual zero five-hour remaining is different from unknown",
+    TrayUsageProjection.ActivePercent(live with {
+        Accounts = [new(new(accountID, "Zero Fixture", null), "Z",
+            new(72, resetTime, 0, resetTime, 0), null)]
+    }) == 0);
+Check("unconfirmed active identity suppresses tray number",
+    TrayUsageProjection.ActivePercent(live with { ActiveIdentityConfirmed = false }) is null);
+Check("host transport failure suppresses tray number",
+    TrayUsageProjection.ActivePercent(live with { Error = "Host stopped" }) is null);
+Check("account mutation suppresses tray number",
+    TrayUsageProjection.ActivePercent(live with { IsMutating = true }) is null);
+Check("disabled tray percentage leaves icon unnumbered",
+    TrayUsageProjection.ActivePercent(live with {
+        Settings = live.Settings with { ShowsMenuBarPercentage = false }
+    }) is null);
+Check("missing active account leaves tray unnumbered",
+    TrayUsageProjection.ActivePercent(live with { ActiveAccountID = otherID }) is null);
+
 using (var wire = JsonDocument.Parse("{\"kind\":\"monitorObservation\",\"observedAtMs\":1800000000000,\"raw\":" + valid + "}"))
 {
     Check("Swift wire observation parses as a Windows monitor sample",

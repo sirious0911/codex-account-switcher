@@ -20,6 +20,27 @@ public sealed record MonitorAccountRow(
     string UsageStatus,
     bool HasUsageError);
 
+// Tray percentages must describe the configured time window, never a
+// fallback from an unrelated bucket (e.g. Free with no five-hour quota).
+// A stale or unconfirmed active identity is not entitled to show a numeric badge.
+public static class TrayUsageProjection
+{
+    public static int? ActivePercent(AccountSnapshot state)
+    {
+        if (!state.Settings.ShowsMenuBarPercentage || state.IsMutating ||
+            !state.ActiveIdentityConfirmed || !string.IsNullOrEmpty(state.Error) ||
+            state.ActiveAccountID is null) return null;
+
+        var usage = state.Accounts.FirstOrDefault(row =>
+            row.Profile.Id == state.ActiveAccountID)?.Usage;
+        if (usage is null) return null;
+
+        return state.Settings.StatusBarUsageWindow == "fiveHour"
+            ? usage.FiveHourRemainingPercent
+            : usage.RemainingPercent;
+    }
+}
+
 public static class MonitorOverview
 {
     public static IReadOnlyList<MonitorAccountRow> From(AccountSnapshot state)

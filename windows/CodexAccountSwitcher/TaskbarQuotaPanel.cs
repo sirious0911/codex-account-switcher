@@ -20,10 +20,12 @@ namespace CodexAccountSwitcher;
 // The existing active-profile gate is the only source of quota observations.
 internal sealed class TaskbarQuotaPanel : IDisposable
 {
-    // Reserve only the space actually needed for the three quota indicators.
-    // At 150% DPI this occupies ~249px instead of the previous ~345px.
+    // Deskband11Lib positions the hosted HWND at the taskbar's TOP edge.
+    // Claim the full 48-DIP taskbar row and center the 30-DIP indicator inside
+    // it; merely setting VerticalAlignment.Center on a 30-DIP HWND is not enough.
     internal const double PreferredWidth = 166;
-    internal const double PreferredHeight = 30;
+    internal const double PreferredHeight = 48;
+    internal const double IndicatorHeight = 30;
     internal const TaskbarContentPlacement Placement = TaskbarContentPlacement.BeforeNotificationArea;
 
     private readonly IntegratedMiniBarState state = new();
@@ -37,6 +39,7 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     private TextBlock? weekly;
     private TextBlock? credits;
     private Border? background;
+    private Grid? taskbarCanvas;
     private Border? separatorOne;
     private Border? separatorTwo;
     private bool hovered;
@@ -178,6 +181,8 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         background = new Border
         {
             CornerRadius = new CornerRadius(4),
+            Height = IndicatorHeight,
+            VerticalAlignment = VerticalAlignment.Center,
             Padding = new Thickness(3, 0, 3, 0),
             Background = Brushes.Transparent,
             Cursor = Cursors.Hand,
@@ -198,6 +203,16 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         rightClickMenu.Opened += (_, _) => exitItem.IsEnabled = canQuit();
         background.ContextMenu = rightClickMenu;
 
+        // The transparent 48-DIP host fills the real taskbar height; only
+        // the interactive 30-DIP strip is vertically centered and hoverable.
+        taskbarCanvas = new Grid
+        {
+            Background = Brushes.Transparent,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            VerticalAlignment = VerticalAlignment.Stretch
+        };
+        taskbarCanvas.Children.Add(background);
+
         hostedWindow = new Window
         {
             Title = "Codex Usage — Taskbar",
@@ -209,10 +224,10 @@ internal sealed class TaskbarQuotaPanel : IDisposable
             Background = Brushes.Transparent,
             ShowInTaskbar = false,
             ShowActivated = false,
-            Content = background
+            Content = taskbarCanvas
         };
 
-        host = new TaskbarContentHost(hostedWindow, background,
+        host = new TaskbarContentHost(hostedWindow, taskbarCanvas,
             new TaskbarContentHostOptions
             {
                 Placement = Placement,
@@ -282,6 +297,7 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         weekly = null;
         credits = null;
         background = null;
+        taskbarCanvas = null;
         separatorOne = null;
         separatorTwo = null;
         hovered = false;

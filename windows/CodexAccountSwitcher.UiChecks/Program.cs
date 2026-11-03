@@ -48,8 +48,9 @@ internal static class Program
             Assert(TaskbarQuotaPanel.Placement ==
                 Deskband11Lib.Core.TaskbarContentPlacement.BeforeNotificationArea &&
                 TaskbarQuotaPanel.PreferredWidth == 166 &&
-                TaskbarQuotaPanel.PreferredHeight == 30,
-                "The compact, flat taskbar panel must stay immediately LEFT of the ^ area.");
+                TaskbarQuotaPanel.PreferredHeight == 48 &&
+                TaskbarQuotaPanel.IndicatorHeight == 30,
+                "The hosted HWND must span the taskbar row while the smaller quota strip stays vertically centered, immediately LEFT of ^.");
             using (var taskbar = new TaskbarQuotaPanel(() => {}, () => {}, () => true))
             {
                 Assert(taskbar.CurrentReadout.FiveHourRemaining == null &&

@@ -202,6 +202,10 @@ open class AccountController {
     public func switchAccount(to id: UUID) async {
         guard !isMutating else { return }
         isMutating = true
+        // Clear only the previous operation's error. A failure in this switch
+        // still installs its own error, and the active-only monitor remains
+        // closed while isMutating is true.
+        visibleError = nil
         await cancelUsageRefresh()
         defer { isMutating = false; refreshWeeklyUsage() }
         do {

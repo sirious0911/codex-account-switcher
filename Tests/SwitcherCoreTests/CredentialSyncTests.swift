@@ -79,7 +79,7 @@ struct CredentialSyncTests {
     @Test func tokenWorkspaceIDTakesPrecedenceOverDefaultClaim() throws {
         let claims = Data(#"{"email":"same@example.test","https://api.openai.com/auth":{"chatgpt_account_id":"personal"}}"#.utf8)
             .base64EncodedString()
-        let data = try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": "workspace", "id_token": "header.\(claims).signature"]])
+        let data = try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": "workspace", "id_token": [REDACTED_SECRET]]])
         #expect(try CredentialIdentity.decode(data)?.accountID == "workspace")
         #expect(try CredentialIdentity.decode(data)?.email == "same@example.test")
     }
@@ -222,6 +222,47 @@ struct CredentialSyncTests {
         #expect(model.accounts.count == 2)
         #expect(model.visibleError?.message == AccountStoreError.cannotRemoveActiveAccount.localizedDescription)
         #expect(try Data(contentsOf: home.appending(path: "auth.json")) == Data(contentsOf: fixture.auth))
+    }
+
+    @Test @MainActor func successfulAccountSwitchClearsPreviousErrorAndRestoresAAfterB() async throws {
+        let fixture = try CredentialFixture()
+        defer { fixture.clean() }
+        let first = fixture.profile("personal")
+        let second = fixture.profile("workspace")
+        try fixture.writeLive("personal", token: "original")
+        try await fixture.store.importCurrentProfile(first)
+        let secondHome = try await fixture.store.createProfileDirectory(id: second.id)
+        try fixture.bytes("workspace", token: "independent").write(
+            to: secondHome.appending(path: "auth.json"))
+        try await fixture.store.addProfile(second)
+
+        let model = AccountController(
+            store: fixture.store, codex: CredentialClient(),
+            switchService: CredentialSwitch(store: fixture.store))
+        await model.start()
+        #expect(model.activeAccountID == first.id)
+
+        // An earlier failed operation must not poison a later successful switch
+        // and permanently suppress the Windows active-only taskbar quota.
+        await model.removeAccount(id: first.id)
+        #expect(model.visibleError != nil)
+
+        await model.switchAccount(to: second.id)
+        await model.waitForWeeklyUsageRefresh()
+        #expect(model.activeAccountID == second.id)
+        #expect(model.activeIdentityConfirmed)
+        #expect(model.visibleError == nil)
+        #expect(try CredentialIdentity.read(from: fixture.active)?.accountID == "workspace")
+
+        await model.removeAccount(id: second.id)
+        #expect(model.visibleError != nil)
+        await model.switchAccount(to: first.id)
+        await model.waitForWeeklyUsageRefresh()
+        #expect(model.activeAccountID == first.id)
+        #expect(model.activeIdentityConfirmed)
+        #expect(model.visibleError == nil)
+        #expect(try CredentialIdentity.read(from: fixture.active)?.accountID == "personal")
+        #expect(try await fixture.store.loadRegistry().accounts.count == 2)
     }
 
     @Test @MainActor func switchingDrainsOldRefreshBeforeChangingCredentials() async throws {

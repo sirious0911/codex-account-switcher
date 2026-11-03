@@ -11,7 +11,6 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using CodexAccountSwitcher.Core;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
 
 namespace CodexAccountSwitcher;
 
@@ -25,12 +24,11 @@ public partial class App : Application
     private bool ownsMutex;
     private EventWaitHandle? activateWindow;
     private RegisteredWaitHandle? activationListener;
-    private Forms.ContextMenuStrip? trayMenu;
-    private TrayQuotaIcons? quotaTray;
+    private TaskbarQuotaPanel? taskbarPanel;
     private CoreClient? client;
     private LocalMonitorWorker? monitorWorker;
-    // Only the confirmed active profile feeds native notification-area icons.
-    // No floating minibar window, secondary process or IPC listener is created.
+    // Only the confirmed active profile feeds a WPF child HWND embedded
+    // before TrayNotifyWnd, immediately to the left of the ^ chevron.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
     private MainWindow? window;
     private DispatcherTimer? updates;
@@ -58,22 +56,14 @@ public partial class App : Application
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
-            trayMenu = new Forms.ContextMenuStrip();
-            var openItem = new Forms.ToolStripMenuItem("Codex Account Switcher Personal");
-            openItem.Click += (_, _) => { ApplyTheme(); window.OpenWindow(); };
-            var quitItem = new Forms.ToolStripMenuItem();
-            quitItem.Click += (_, _) => _ = QuitAsync();
-            trayMenu.Items.Add(openItem);
-            trayMenu.Items.Add(new Forms.ToolStripSeparator());
-            trayMenu.Items.Add(quitItem);
-            trayMenu.Opening += (_, _) => {
-                quitItem.Text = client.State.Text("quit");
-                quitItem.Enabled = !window.IsBusy;
-            };
-            quotaTray = new TrayQuotaIcons(trayMenu, () => { ApplyTheme(); window.OpenWindow(); });
+            taskbarPanel = new TaskbarQuotaPanel(
+                () => { ApplyTheme(); window.OpenWindow(); },
+                () => _ = QuitAsync(),
+                () => !window.IsBusy);
             SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             client.Changed += OnClientChanged;
             await client.InitializeAsync();
+            taskbarPanel?.Start();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
@@ -94,35 +84,35 @@ public partial class App : Application
             System.Diagnostics.Trace.TraceWarning("Local monitor persistence failed: " + ex.GetType().Name);
         }
         // The local worker receives all profiles. Only confirmed active-profile
-        // observations may update the native taskbar notification icons.
+        // observations may update the taskbar child panel.
         if (!externalMonitorGate.Allows(sample)) return;
-        if (Dispatcher.CheckAccess()) quotaTray?.Accept(sample);
+        if (Dispatcher.CheckAccess()) taskbarPanel?.Accept(sample);
         else Dispatcher.BeginInvoke(new Action(() => {
             // Source selection must be rechecked after deferred UI dispatch.
-            if (externalMonitorGate.Allows(sample)) quotaTray?.Accept(sample);
+            if (externalMonitorGate.Allows(sample)) taskbarPanel?.Accept(sample);
         }));
     }
 
     private void OnClientChanged()
     {
         if (client != null && externalMonitorGate.Observe(client.State)) {
-            if (Dispatcher.CheckAccess()) quotaTray?.Invalidate();
-            else Dispatcher.BeginInvoke(new Action(() => quotaTray?.Invalidate()));
+            if (Dispatcher.CheckAccess()) taskbarPanel?.Invalidate();
+            else Dispatcher.BeginInvoke(new Action(() => taskbarPanel?.Invalidate()));
         }
-        quotaTray?.Refresh();
+        taskbarPanel?.Refresh();
     }
 
     private void OnSwitchRequested()
     {
         externalMonitorGate.SwitchRequested();
-        if (Dispatcher.CheckAccess()) quotaTray?.Invalidate();
-        else Dispatcher.BeginInvoke(new Action(() => quotaTray?.Invalidate()));
+        if (Dispatcher.CheckAccess()) taskbarPanel?.Invalidate();
+        else Dispatcher.BeginInvoke(new Action(() => taskbarPanel?.Invalidate()));
     }
 
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
         if (Dispatcher.HasShutdownStarted) return;
-        Dispatcher.BeginInvoke(new Action(() => { if (!exiting) quotaTray?.Refresh(force: true); }));
+        Dispatcher.BeginInvoke(new Action(() => { if (!exiting) taskbarPanel?.Refresh(); }));
     }
     private static bool IsDark() {
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
@@ -181,8 +171,7 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e) {
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-        quotaTray?.Dispose();
-        trayMenu?.Dispose();
+        taskbarPanel?.Dispose();
         activateWindow?.Dispose();
         if (ownsMutex) instance?.ReleaseMutex(); instance?.Dispose();
         base.OnExit(e);

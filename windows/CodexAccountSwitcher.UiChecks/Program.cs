@@ -41,9 +41,24 @@ internal static class Program
             var appFields = typeof(App).GetFields(
                 System.Reflection.BindingFlags.Instance |
                 System.Reflection.BindingFlags.NonPublic);
-            Assert(appFields.Any(f => f.FieldType == typeof(TrayQuotaIcons)) &&
+            Assert(appFields.Any(f => f.FieldType == typeof(TaskbarQuotaPanel)) &&
+                !appFields.Any(f => f.FieldType == typeof(TrayQuotaIcons)) &&
                 !appFields.Any(f => f.FieldType == typeof(IntegratedMiniBarWindow)),
-                "Normal app startup must own native tray quota icons, not a floating minibar.");
+                "Normal app startup must own a taskbar child host, not floating or overflow-tray displays.");
+            Assert(TaskbarQuotaPanel.Placement ==
+                Deskband11Lib.Core.TaskbarContentPlacement.BeforeNotificationArea &&
+                TaskbarQuotaPanel.PreferredWidth == 230 &&
+                TaskbarQuotaPanel.PreferredHeight == 36,
+                "The actual host must be placed directly LEFT of the ^ notification area.");
+            using (var taskbar = new TaskbarQuotaPanel(() => {}, () => {}, () => true))
+            {
+                Assert(taskbar.CurrentReadout.FiveHourRemaining == null &&
+                    taskbar.CurrentReadout.ResetCreditsAvailable == null,
+                    "Fresh taskbar host must not invent account quota values.");
+                taskbar.Invalidate();
+                Assert(taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
+                    "Switch or host error must clear the embedded taskbar quota surface.");
+            }
             var iconSize = new System.Drawing.Size(16, 16);
             using (var fiveIcon = TrayUsageIcon.CreateMetric("5H", "85", false,
                 iconSize, MiniBarDisplayStatus.FreshUnbound))

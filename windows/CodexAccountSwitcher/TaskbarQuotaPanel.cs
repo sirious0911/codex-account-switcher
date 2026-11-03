@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -19,8 +20,10 @@ namespace CodexAccountSwitcher;
 // The existing active-profile gate is the only source of quota observations.
 internal sealed class TaskbarQuotaPanel : IDisposable
 {
-    internal const double PreferredWidth = 230;
-    internal const double PreferredHeight = 36;
+    // Reserve only the space actually needed for the three quota indicators.
+    // At 150% DPI this occupies ~249px instead of the previous ~345px.
+    internal const double PreferredWidth = 166;
+    internal const double PreferredHeight = 30;
     internal const TaskbarContentPlacement Placement = TaskbarContentPlacement.BeforeNotificationArea;
 
     private readonly IntegratedMiniBarState state = new();
@@ -34,6 +37,9 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     private TextBlock? weekly;
     private TextBlock? credits;
     private Border? background;
+    private Border? separatorOne;
+    private Border? separatorTwo;
+    private bool hovered;
     private bool attaching;
     private bool recreating;
     private bool disposed;
@@ -71,23 +77,53 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         if (disposed || fiveHour is null || weekly is null || credits is null) return;
 
         var readout = TrayQuotaReadout.From(CurrentReadout);
-        fiveHour.Text = "5H " + Format(readout.FiveHourIcon, percent: true);
-        weekly.Text = "7D " + Format(readout.WeeklyIcon, percent: true);
-        credits.Text = "R " + readout.CreditsIcon;
+        var light = IsLightTaskbar();
+        SetMetric(fiveHour, "5H", Format(readout.FiveHourIcon, percent: true), light);
+        SetMetric(weekly, "7D", Format(readout.WeeklyIcon, percent: true), light);
+        SetMetric(credits, "R", readout.CreditsIcon, light);
         fiveHour.ToolTip = readout.FiveHourTooltip;
         weekly.ToolTip = readout.WeeklyTooltip;
         credits.ToolTip = readout.CreditsTooltip;
 
-        var light = IsLightTaskbar();
-        var ink = light ? Color.FromRgb(28, 36, 47) : Color.FromRgb(240, 244, 249);
-        var fill = light ? Color.FromArgb(232, 235, 242, 252) : Color.FromArgb(210, 38, 42, 50);
-        foreach (var text in new[] { fiveHour, weekly, credits })
-            text.Foreground = new SolidColorBrush(ink);
-        if (background != null) background.Background = new SolidColorBrush(fill);
+        var dividerColor = light ? Color.FromArgb(75, 68, 77, 91)
+            : Color.FromArgb(90, 224, 231, 242);
+        foreach (var divider in new[] { separatorOne, separatorTwo })
+            if (divider != null) divider.Background = new SolidColorBrush(dividerColor);
+        ApplyHoverBackground(light);
     }
 
     private static string Format(string value, bool percent) =>
         value == "?" ? "?" : value + (percent ? "%" : "");
+
+    // Separate label and value typography without adding visible card chrome.
+    private static void SetMetric(TextBlock text, string label, string value, bool light)
+    {
+        text.Inlines.Clear();
+        text.Inlines.Add(new Run(label + " ")
+        {
+            Foreground = new SolidColorBrush(light
+                ? Color.FromRgb(85, 93, 108)
+                : Color.FromRgb(181, 189, 201)),
+            FontWeight = FontWeights.Medium
+        });
+        text.Inlines.Add(new Run(value)
+        {
+            Foreground = new SolidColorBrush(light
+                ? Color.FromRgb(21, 28, 40)
+                : Color.FromRgb(246, 249, 252)),
+            FontWeight = FontWeights.SemiBold
+        });
+    }
+
+    private void ApplyHoverBackground(bool light)
+    {
+        if (background is null) return;
+        // Normally transparent; only a faint Windows-style interactive hover.
+        background.Background = hovered
+            ? new SolidColorBrush(light ? Color.FromArgb(17, 16, 23, 35)
+                : Color.FromArgb(28, 255, 255, 255))
+            : Brushes.Transparent;
+    }
 
     private static bool IsLightTaskbar()
     {
@@ -131,16 +167,25 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         fiveHour = Text("5H ?");
         weekly = Text("7D ?");
         credits = Text("R ?");
+        separatorOne = Separator();
+        separatorTwo = Separator();
         row.Children.Add(fiveHour);
+        row.Children.Add(separatorOne);
         row.Children.Add(weekly);
+        row.Children.Add(separatorTwo);
         row.Children.Add(credits);
 
         background = new Border
         {
-            CornerRadius = new CornerRadius(5),
-            Padding = new Thickness(2, 0, 2, 0),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(3, 0, 3, 0),
+            Background = Brushes.Transparent,
+            Cursor = Cursors.Hand,
+            ToolTip = "Codex 계정전환 · 클릭해서 계정 관리",
             Child = row
         };
+        background.MouseEnter += (_, _) => { hovered = true; ApplyHoverBackground(IsLightTaskbar()); };
+        background.MouseLeave += (_, _) => { hovered = false; ApplyHoverBackground(IsLightTaskbar()); };
         background.MouseLeftButtonUp += (_, _) => openAccounts();
         var rightClickMenu = new ContextMenu();
         var openItem = new MenuItem { Header = "Codex Account Switcher 열기" };
@@ -189,10 +234,19 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     {
         Text = value,
         FontSize = 11,
-        FontWeight = FontWeights.SemiBold,
         FontFamily = new FontFamily("Segoe UI"),
         VerticalAlignment = VerticalAlignment.Center,
-        Margin = new Thickness(5, 0, 5, 0)
+        Margin = new Thickness(1, 0, 1, 0),
+        TextAlignment = TextAlignment.Center
+    };
+
+    private static Border Separator() => new()
+    {
+        Width = 1,
+        Height = 14,
+        Margin = new Thickness(7, 0, 7, 0),
+        VerticalAlignment = VerticalAlignment.Center,
+        IsHitTestVisible = false
     };
 
     private async void OnWindowRecreationRequired(object? sender, EventArgs e)
@@ -228,6 +282,9 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         weekly = null;
         credits = null;
         background = null;
+        separatorOne = null;
+        separatorTwo = null;
+        hovered = false;
         oldWindow?.Close();
     }
 

@@ -47,9 +47,9 @@ internal static class Program
                 "Normal app startup must own a taskbar child host, not floating or overflow-tray displays.");
             Assert(TaskbarQuotaPanel.Placement ==
                 Deskband11Lib.Core.TaskbarContentPlacement.BeforeNotificationArea &&
-                TaskbarQuotaPanel.PreferredWidth == 230 &&
-                TaskbarQuotaPanel.PreferredHeight == 36,
-                "The actual host must be placed directly LEFT of the ^ notification area.");
+                TaskbarQuotaPanel.PreferredWidth == 166 &&
+                TaskbarQuotaPanel.PreferredHeight == 30,
+                "The compact, flat taskbar panel must stay immediately LEFT of the ^ area.");
             using (var taskbar = new TaskbarQuotaPanel(() => {}, () => {}, () => true))
             {
                 Assert(taskbar.CurrentReadout.FiveHourRemaining == null &&

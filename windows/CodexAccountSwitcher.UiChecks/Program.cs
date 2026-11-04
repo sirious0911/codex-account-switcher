@@ -100,6 +100,15 @@ internal static class Program
                 taskbar.Invalidate();
                 Assert(taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
                     "Switch or host error must clear the embedded taskbar quota surface.");
+                var free = new NonWeeklyUsage(73, 43_200,
+                    DateTimeOffset.FromUnixTimeSeconds(1_900_000_000), 0, DateTimeOffset.UtcNow);
+                taskbar.AcceptNonWeekly(free);
+                Assert(taskbar.CurrentNonWeeklyUsage?.WindowLabel == "30D" &&
+                       taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
+                    "Real Free 30D must not be published as a weekly quota.");
+                taskbar.Invalidate();
+                Assert(taskbar.CurrentNonWeeklyUsage is null,
+                    "Switch invalidation must immediately clear another account's 30D quota.");
             }
             var iconSize = new System.Drawing.Size(16, 16);
             using (var fiveIcon = TrayUsageIcon.CreateMetric("5H", "85", false,

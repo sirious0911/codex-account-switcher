@@ -473,8 +473,17 @@ public enum ResetCreditOutcome: String, Codable, Sendable {
 
 public protocol AccountClient: CodexIdentityReading {
     func readWeeklyUsage(profileHome: URL) async throws -> WeeklyUsage
+    func readUsage(profileHome: URL) async throws -> AccountUsageResult
     func consumeResetCredit(profileHome: URL, creditID: String, idempotencyKey: String) async throws -> ResetCreditOutcome
     func login(profileHome: URL) async throws -> AccountIdentity
+}
+
+// Existing test clients and alternate provider clients keep their original
+// WeeklyUsage implementation. Only the Codex client handles other window types.
+public extension AccountClient {
+    func readUsage(profileHome: URL) async throws -> AccountUsageResult {
+        .weekly(try await readWeeklyUsage(profileHome: profileHome))
+    }
 }
 
 public struct CodexClient: AccountClient {
@@ -515,6 +524,13 @@ public struct CodexClient: AccountClient {
     }
 
     public func readWeeklyUsage(profileHome: URL) async throws -> WeeklyUsage {
+        switch try await readUsage(profileHome: profileHome) {
+        case let .weekly(usage): return usage
+        case .nonWeekly: throw CodexClientError.weeklyUsageUnavailable
+        }
+    }
+
+    public func readUsage(profileHome: URL) async throws -> AccountUsageResult {
         let result = try await withSession(profileHome: profileHome) { session in
             try await session.request(
                 method: "account/rateLimits/read",
@@ -522,6 +538,12 @@ public struct CodexClient: AccountClient {
                 timeout: requestTimeout
             )
         }
+        return try interpretRateLimits(result)
+    }
+
+    /// Pure official response interpretation, also exercised with synthetic
+    /// Free/partial-plan fixtures without authenticating to any account.
+    func interpretRateLimits(_ result: JSONValue) throws -> AccountUsageResult {
         let availableCount = result["rateLimitResetCredits"]?["availableCount"]?.intValue
         let credits: [BankedResetCredit]?
         switch result["rateLimitResetCredits"]?["credits"] {
@@ -544,24 +566,44 @@ public struct CodexClient: AccountClient {
         case .none, .null: credits = nil
         default: throw CodexClientError.malformedResponse
         }
-        let normalized = try WeeklyUsageNormalizer.normalize(
-            parseWindows(result),
-            resetCreditsRemaining: availableCount.flatMap { $0 >= 0 ? $0 : nil },
-            resetCredits: credits
-        )
-        // These optional fields are defined by the official rate-limits response.
-        // A missing value remains UNKNOWN; the original quota calculation is unchanged.
+        let windows = parseWindows(result)
+        let resetCount = availableCount.flatMap { $0 >= 0 ? $0 : nil }
+        let normalized: WeeklyUsage?
+        do {
+            normalized = try WeeklyUsageNormalizer.normalize(
+                windows, resetCreditsRemaining: resetCount, resetCredits: credits)
+        } catch CodexClientError.weeklyUsageUnavailable {
+            normalized = nil
+        }
         let bucket = result["rateLimitsByLimitId"]?["codex"] ?? result["rateLimits"]
-        return WeeklyUsage(
-            remainingPercent: normalized.remainingPercent,
-            resetsAt: normalized.resetsAt,
-            fiveHourRemainingPercent: normalized.fiveHourRemainingPercent,
-            fiveHourResetsAt: normalized.fiveHourResetsAt,
-            resetCreditsRemaining: normalized.resetCreditsRemaining,
-            resetCredits: normalized.resetCredits,
-            planType: bucket?["planType"]?.stringValue,
-            ordinaryUsageAllowed: result["ordinaryUsageAllowed"]?.boolValue
-        )
+        if let normalized {
+            return .weekly(WeeklyUsage(
+                remainingPercent: normalized.remainingPercent,
+                resetsAt: normalized.resetsAt,
+                fiveHourRemainingPercent: normalized.fiveHourRemainingPercent,
+                fiveHourResetsAt: normalized.fiveHourResetsAt,
+                resetCreditsRemaining: normalized.resetCreditsRemaining,
+                resetCredits: normalized.resetCredits,
+                planType: bucket?["planType"]?.stringValue,
+                ordinaryUsageAllowed: result["ordinaryUsageAllowed"]?.boolValue
+            ))
+        }
+
+        // Free or plan-specific accounts can report a genuine 30-day, 15-minute
+        // or other duration while providing no seven-day quota. Show only that
+        // exact duration; never manufacture 5H/7D or re-label 30D as weekly.
+        guard let alternate = windows.filter({
+            $0.windowDurationMins > 0 && $0.windowDurationMins <= 525_600 &&
+            $0.usedPercent.isFinite && $0.resetsAt.isFinite
+        }).max(by: { $0.windowDurationMins < $1.windowDurationMins }) else {
+            throw CodexClientError.weeklyUsageUnavailable
+        }
+        return .nonWeekly(NonWeeklyUsage(
+            remainingPercent: Int(min(100, max(0, (100 - alternate.usedPercent).rounded()))),
+            windowDurationMins: alternate.windowDurationMins,
+            resetsAt: Date(timeIntervalSince1970: alternate.resetsAt),
+            resetCreditsRemaining: resetCount
+        ))
     }
 
     public func consumeResetCredit(profileHome: URL, creditID: String, idempotencyKey: String) async throws -> ResetCreditOutcome {

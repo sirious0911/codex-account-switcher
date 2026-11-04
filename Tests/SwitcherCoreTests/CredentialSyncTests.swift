@@ -265,6 +265,46 @@ struct CredentialSyncTests {
         #expect(try await fixture.store.loadRegistry().accounts.count == 2)
     }
 
+    @Test @MainActor func fastRefreshReadsOnlyConfirmedActiveAccount() async throws {
+        let fixture = try CredentialFixture()
+        defer { fixture.clean() }
+        let first = fixture.profile("personal")
+        let second = fixture.profile("workspace")
+        try fixture.writeLive("personal", token: "first")
+        try await fixture.store.importCurrentProfile(first)
+        let secondHome = try await fixture.store.createProfileDirectory(id: second.id)
+        try fixture.bytes("workspace", token: "second").write(
+            to: secondHome.appending(path: "auth.json"))
+        try await fixture.store.addProfile(second)
+        let firstHome = await fixture.store.profileHome(id: first.id)
+        let client = CredentialClient()
+        let model = AccountController(store: fixture.store, codex: client,
+            switchService: CredentialSwitch(store: fixture.store))
+        await model.start()
+
+        model.refreshActiveUsage()
+        await model.waitForWeeklyUsageRefresh()
+        #expect(await client.usageReads() == [firstHome])
+        #expect(model.usageStates[first.id]?.displayedUsage?.remainingPercent == 59)
+        #expect(model.usageStates[second.id] == nil)
+
+        await client.clearUsageReads()
+        model.refreshWeeklyUsage()
+        await model.waitForWeeklyUsageRefresh()
+        let allReads = await client.usageReads()
+        #expect(allReads.count == 2)
+        #expect(Set(allReads) == Set([firstHome, secondHome]))
+
+        await model.switchAccount(to: second.id)
+        await model.waitForWeeklyUsageRefresh()
+        #expect(model.activeAccountID == second.id)
+        await client.clearUsageReads()
+        model.refreshActiveUsage()
+        await model.waitForWeeklyUsageRefresh()
+        #expect(await client.usageReads() == [secondHome])
+        #expect(try CredentialIdentity.read(from: fixture.active)?.accountID == "workspace")
+    }
+
     @Test @MainActor func switchingDrainsOldRefreshBeforeChangingCredentials() async throws {
         let fixture = try CredentialFixture()
         defer { fixture.clean() }
@@ -328,6 +368,9 @@ private struct CredentialSwitch: SwitchServicing {
 
 private actor CredentialClient: AccountClient {
     var pausesPersonal: Bool
+    private var observedUsageHomes: [URL] = []
+    func usageReads() -> [URL] { observedUsageHomes }
+    func clearUsageReads() { observedUsageHomes.removeAll() }
     var readStarted = false
     var observer: CheckedContinuation<Void, Never>?
     var blocked: CheckedContinuation<Void, Never>?
@@ -341,6 +384,7 @@ private actor CredentialClient: AccountClient {
         throw CodexClientError.remoteError(code: nil, message: "Unexpected reset consumption in this fixture.")
     }
     func readWeeklyUsage(profileHome: URL) async throws -> WeeklyUsage {
+        observedUsageHomes.append(profileHome)
         let bytes = try String(contentsOf: profileHome.appending(path: "auth.json"), encoding: .utf8)
         if bytes.contains("revoked") { throw CodexClientError.identityUnavailable }
         if pausesPersonal, bytes.contains("personal") {

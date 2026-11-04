@@ -131,6 +131,38 @@ public struct WeeklyUsage: Codable, Equatable, Sendable {
     }
 }
 
+/// A real Codex quota with a nonstandard duration (such as Free 30D).
+/// It must NEVER be mislabeled as a five-hour or seven-day window.
+public struct NonWeeklyUsage: Codable, Equatable, Sendable {
+    public let remainingPercent: Int
+    public let windowDurationMins: Int
+    public let resetsAt: Date
+    public let resetCreditsRemaining: Int?
+    /// Stable receipt time so re-rendering a cached snapshot cannot extend freshness.
+    public let observedAt: Date
+
+    public init(remainingPercent: Int, windowDurationMins: Int,
+                resetsAt: Date, resetCreditsRemaining: Int? = nil,
+                observedAt: Date = Date()) {
+        self.remainingPercent = remainingPercent
+        self.windowDurationMins = windowDurationMins
+        self.resetsAt = resetsAt
+        self.resetCreditsRemaining = resetCreditsRemaining
+        self.observedAt = observedAt
+    }
+
+    public var windowLabel: String {
+        if windowDurationMins % 1_440 == 0 { return "\(windowDurationMins / 1_440)D" }
+        if windowDurationMins % 60 == 0 { return "\(windowDurationMins / 60)H" }
+        return "\(windowDurationMins)m"
+    }
+}
+
+public enum AccountUsageResult: Sendable {
+    case weekly(WeeklyUsage)
+    case nonWeekly(NonWeeklyUsage)
+}
+
 public struct UsageCacheEntry: Codable, Equatable, Sendable {
     public let profileID: UUID
     public let usage: WeeklyUsage
@@ -153,20 +185,33 @@ public enum UsageViewState: Equatable, Sendable {
     case idle
     case loaded(WeeklyUsage)
     case stale(WeeklyUsage, String)
+    case nonWeekly(NonWeeklyUsage)
+    case staleNonWeekly(NonWeeklyUsage, String)
     case unavailable(String)
 
     public var displayedUsage: WeeklyUsage? {
         switch self {
         case let .loaded(usage), let .stale(usage, _):
             usage
-        case .idle, .unavailable:
+        case .idle, .nonWeekly, .staleNonWeekly, .unavailable:
+            nil
+        }
+    }
+
+    public var nonWeeklyUsage: NonWeeklyUsage? {
+        switch self {
+        case let .nonWeekly(usage), let .staleNonWeekly(usage, _):
+            usage
+        default:
             nil
         }
     }
 
     public var refreshError: String? {
-        guard case let .stale(_, message) = self else { return nil }
-        return message
+        switch self {
+        case let .stale(_, message), let .staleNonWeekly(_, message): message
+        default: nil
+        }
     }
 }
 

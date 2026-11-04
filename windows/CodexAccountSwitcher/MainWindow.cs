@@ -161,12 +161,22 @@ public sealed class MainWindow : Window
                     details.Children.Add(UsageLine(T(State.Settings.ShowsFiveHourUsage ? "weekly" : "usage"), usage.RemainingPercent,
                         State.Settings.ShowsFiveHourUsage ? Reset(usage.ResetsAt) : null));
                     details.ToolTip = row.UsageError;
-                } else { var missing = Text(row.UsageStatus == "idle" ? T("usage") + " —" : T("usage_unavailable"), 10.5, muted: true); missing.ToolTip = row.UsageError; details.Children.Add(missing); }
+                } else if (row.NonWeeklyUsage is { } other) {
+                    // Free may expose 30D but no weekly / five-hour window.
+                    // Show the provider's exact duration rather than a fake 7D.
+                    details.Children.Add(UsageLine(other.WindowLabel, other.RemainingPercent,
+                        Reset(other.ResetsAt)));
+                    details.ToolTip = row.UsageError;
+                } else {
+                    var missing = Text(row.UsageStatus == "idle" ? T("usage") + " —" : T("usage_unavailable"), 10.5, muted: true);
+                    missing.ToolTip = row.UsageError; details.Children.Add(missing);
+                }
                 var accountInfo = new Grid();
                 accountInfo.ColumnDefinitions.Add(new ColumnDefinition());
                 accountInfo.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                if (row.Usage is { } infoUsage) {
-                    var resetCredits = Text(T("reset_credits") + ": " + (infoUsage.ResetCreditsRemaining?.ToString(CultureInfo.CurrentCulture) ?? T("unknown")), 10.5, muted: true);
+                if (row.Usage is not null || row.NonWeeklyUsage is not null) {
+                    var remaining = row.Usage?.ResetCreditsRemaining ?? row.NonWeeklyUsage?.ResetCreditsRemaining;
+                    var resetCredits = Text(T("reset_credits") + ": " + (remaining?.ToString(CultureInfo.CurrentCulture) ?? T("unknown")), 10.5, muted: true);
                     resetCredits.Margin = new Thickness(8, 0, 0, 0);
                     Grid.SetColumn(resetCredits, 1); accountInfo.Children.Add(resetCredits);
                 }

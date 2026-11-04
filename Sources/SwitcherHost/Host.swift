@@ -88,6 +88,8 @@ private final class Host {
         guard let model = controller else { throw HostError.message("Initialize the host first.") }
         switch request.command {
         case "refresh": model.refreshWeeklyUsage()
+        // Windows-only opportunistic poll; no inactive-profile API calls.
+        case "refreshActive": model.refreshActiveUsage()
         case "add": model.addAccount()
         case "cancelAdd": model.cancelAddingAccount()
         case "register": await model.registerCurrentAccount()

@@ -31,6 +31,8 @@ public partial class App : Application
     // Only the confirmed active profile feeds a WPF child HWND embedded
     // before TrayNotifyWnd, immediately to the left of the ^ chevron.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
+    private Guid? lastOtherQuotaProfile;
+    private DateTimeOffset? lastOtherQuotaReceipt;
     private MainWindow? window;
     private DispatcherTimer? updates;
     private bool exiting;
@@ -103,11 +105,28 @@ public partial class App : Application
 
     private void OnClientChanged()
     {
-        if (client != null && externalMonitorGate.Observe(client.State)) {
-            if (Dispatcher.CheckAccess()) taskbarPanel?.Invalidate();
-            else Dispatcher.BeginInvoke(new Action(() => taskbarPanel?.Invalidate()));
+        if (client is null) return;
+        var state = client.State;
+        if (externalMonitorGate.Observe(state)) taskbarPanel?.Invalidate();
+        // On a Free/partial plan there can be no weekly quota observation.
+        // Accept only a confirmed active profile's *actual*, newly received
+        // non-weekly quota. Do not borrow the old profile's 5H/7D metrics.
+        if (state.ActiveAccountID is Guid activeId &&
+            externalMonitorGate.ActiveProfile == activeId &&
+            state.Accounts.FirstOrDefault(x => x.Profile.Id == activeId) is { } active &&
+            active.UsageStatus == "nonWeekly" && active.NonWeeklyUsage is { } other)
+        {
+            taskbarPanel?.AcceptNonWeekly(other);
+            if ((lastOtherQuotaProfile != activeId || lastOtherQuotaReceipt != other.ObservedAt) &&
+                DateTimeOffset.UtcNow - other.ObservedAt is var age &&
+                age >= TimeSpan.FromSeconds(-30) && age <= TimeSpan.FromMinutes(6))
+            {
+                lastOtherQuotaProfile = activeId;
+                lastOtherQuotaReceipt = other.ObservedAt;
+                adaptiveUsage?.ObserveFreshActiveSample(activeId);
+            }
         }
-        taskbarPanel?.Refresh();
+        else taskbarPanel?.Refresh();
     }
 
     private void OnSwitchRequested()

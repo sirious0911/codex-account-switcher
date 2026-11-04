@@ -54,6 +54,11 @@ struct AccountRow: View {
                     if let usage = usageState.displayedUsage {
                         Text(resetCreditsText(for: usage))
                             .fixedSize(horizontal: true, vertical: false)
+                    } else if let alternate = usageState.nonWeeklyUsage {
+                        Text("\(L10n.string("reset_credits", language: language)): " +
+                             (alternate.resetCreditsRemaining.map(String.init) ??
+                              L10n.string("unknown", language: language)))
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                     .font(.system(size: 10.5).monospacedDigit())
@@ -92,6 +97,11 @@ struct AccountRow: View {
             } else {
                 compactWeeklyUsageContent(usage)
             }
+        case let .nonWeekly(usage), let .staleNonWeekly(usage, _):
+            // No relabeling a real 30D Free limit as a missing 7D limit.
+            limitRow(title: usage.windowLabel,
+                     remainingPercent: usage.remainingPercent,
+                     resetsAt: usage.resetsAt, includesDate: true)
         }
     }
 

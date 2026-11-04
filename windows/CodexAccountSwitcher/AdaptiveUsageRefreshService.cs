@@ -47,10 +47,10 @@ internal sealed class AdaptiveUsageRefreshService : IDisposable
         dispatching = true;
         try
         {
-            // The Swift core remains the only API caller and owns the original
-            // 5-minute timer. Its refresh command resets that timer, preventing
-            // parallel independent poll loops and duplicate refresh bursts.
-            await client.CommandAsync("refresh");
+            // The Swift core remains the only API caller. The new refreshActive
+            // host command selects the confirmed active account after
+            // synchronizing identity and resets the normal 5-minute timer.
+            await client.CommandAsync("refreshActive");
         }
         catch (Exception error)
         {

@@ -29,6 +29,7 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     internal const TaskbarContentPlacement Placement = TaskbarContentPlacement.BeforeNotificationArea;
 
     private readonly IntegratedMiniBarState state = new();
+    private NonWeeklyUsage? alternateQuota;
     private readonly Action openAccounts;
     private readonly Action quitApp;
     private readonly Func<bool> canQuit;
@@ -63,17 +64,31 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     {
         if (disposed) return;
         state.TryApply(sample, DateTimeOffset.UtcNow);
+        alternateQuota = null;
+        Refresh();
+    }
+
+    internal void AcceptNonWeekly(NonWeeklyUsage actual)
+    {
+        if (disposed || actual.RemainingPercent is < 0 or > 100 ||
+            actual.WindowDurationMins <= 0 || actual.WindowDurationMins > 525_600) return;
+        // The active profile has a genuine plan-specific window. Never
+        // represent it as a weekly/5H quota or share the old account's sample.
+        state.Invalidate(DateTimeOffset.UtcNow);
+        alternateQuota = actual;
         Refresh();
     }
 
     internal void Invalidate()
     {
         if (disposed) return;
+        alternateQuota = null;
         state.Invalidate(DateTimeOffset.UtcNow);
         Refresh();
     }
 
     internal MiniBarReadout CurrentReadout => state.Read(DateTimeOffset.UtcNow);
+    internal NonWeeklyUsage? CurrentNonWeeklyUsage => alternateQuota;
 
     internal void Refresh()
     {
@@ -81,12 +96,32 @@ internal sealed class TaskbarQuotaPanel : IDisposable
 
         var readout = TrayQuotaReadout.From(CurrentReadout);
         var light = IsLightTaskbar();
-        SetMetric(fiveHour, "5H", Format(readout.FiveHourIcon, percent: true), light);
-        SetMetric(weekly, "7D", Format(readout.WeeklyIcon, percent: true), light);
-        SetMetric(credits, "R", readout.CreditsIcon, light);
-        fiveHour.ToolTip = readout.FiveHourTooltip;
-        weekly.ToolTip = readout.WeeklyTooltip;
-        credits.ToolTip = readout.CreditsTooltip;
+        var alternate = alternateQuota;
+        var age = alternate is null ? TimeSpan.MaxValue :
+            DateTimeOffset.UtcNow - alternate.ObservedAt;
+        if (alternate is not null && age >= TimeSpan.FromSeconds(-30) &&
+            age <= TimeSpan.FromMinutes(6))
+        {
+            SetMetric(fiveHour, "5H", "?", light);
+            SetMetric(weekly, alternate.WindowLabel, alternate.RemainingPercent + "%", light);
+            SetMetric(credits, "R", alternate.ResetCreditsRemaining?.ToString(
+                CultureInfo.InvariantCulture) ?? "?", light);
+            fiveHour.ToolTip = "5H: not provided by this Codex account";
+            weekly.ToolTip = alternate.WindowLabel + ": " + alternate.RemainingPercent +
+                "% remaining; observed " + age.TotalSeconds.ToString("F0",
+                CultureInfo.InvariantCulture) + "s ago";
+            credits.ToolTip = "Reset credits: " +
+                (alternate.ResetCreditsRemaining?.ToString(CultureInfo.InvariantCulture) ?? "unknown");
+        }
+        else
+        {
+            SetMetric(fiveHour, "5H", Format(readout.FiveHourIcon, percent: true), light);
+            SetMetric(weekly, "7D", Format(readout.WeeklyIcon, percent: true), light);
+            SetMetric(credits, "R", readout.CreditsIcon, light);
+            fiveHour.ToolTip = readout.FiveHourTooltip;
+            weekly.ToolTip = readout.WeeklyTooltip;
+            credits.ToolTip = readout.CreditsTooltip;
+        }
 
         var dividerColor = light ? Color.FromArgb(75, 68, 77, 91)
             : Color.FromArgb(90, 224, 231, 242);

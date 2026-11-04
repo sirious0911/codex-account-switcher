@@ -146,6 +146,22 @@ Check("empty account set produces empty monitor", MonitorOverview.From(AccountSn
 Check("monitor projections never mutate account snapshot", live.Accounts[0].Usage!.ResetCreditsRemaining == 0 &&
     live.Accounts[1].Usage is null && live.ActiveAccountID == accountID);
 
+// The B Free response provided a real 30-day quota but no seven-day
+// window. The actual duration must survive the shared Swift-to-WPF DTO.
+var free30Day = new NonWeeklyUsage(73, 43_200,
+    DateTimeOffset.FromUnixTimeSeconds(1_900_000_000), 0, DateTimeOffset.UtcNow);
+Check("free B plan's 30-day quota label is exact", free30Day.WindowLabel == "30D");
+Check("non-weekly quota does not become a synthetic seven-day metric",
+    TrayUsageProjection.ActivePercent(live with {
+        Accounts = [new(new(accountID, "Free 30D", null), "F", null, null,
+            "nonWeekly", null, free30Day)]
+    }) is null);
+Check("real zero reset credits survive non-weekly quota DTO",
+    free30Day.ResetCreditsRemaining == 0 && free30Day.RemainingPercent == 73);
+Check("short non-weekly durations retain their own label",
+    new NonWeeklyUsage(50, 15, resetTime, null, DateTimeOffset.UtcNow).WindowLabel == "15m" &&
+    new NonWeeklyUsage(50, 300, resetTime, null, DateTimeOffset.UtcNow).WindowLabel == "5H");
+
 // Free/partial-plan regression: a configured 5H badge must never silently
 // substitute a 7D percentage when five-hour quota is absent.
 var freeLike = live with {

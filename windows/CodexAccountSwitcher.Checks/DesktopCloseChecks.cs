@@ -45,7 +45,40 @@ internal static class DesktopCloseChecks
             Require(FindFixture(newExecutable) is null, "The refreshed package path should close the updated fixture.");
             Require(discoveryCount == 4, "Each open and close operation should discover the current package path.");
 
-            Console.WriteLine("PASS: a versioned Store-path update is discovered for each open and close; normal window close exits the matching process.");
+            // A packaged Electron app can hide on X. The switcher must refuse
+            // the handoff before hiding the visible window if no real Quit
+            // menu can be invoked. The process remains alive and accessible.
+            using (var noMenu = LaunchFixture(oldExecutable, "no-menu"))
+            {
+                await WaitForWindowAsync(oldExecutable);
+                var packaged = new DesktopController(_ =>
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")));
+                var denied = false;
+                try { await packaged.CloseAsync(CancellationToken.None); }
+                catch (IOException ex) {
+                    denied = ex.Message.Contains("File", StringComparison.Ordinal) &&
+                        ex.Message.Contains("account was not changed", StringComparison.Ordinal);
+                }
+                Require(denied, "Packaged app without File -> Quit must fail closed.");
+                noMenu.Refresh();
+                Require(!noMenu.HasExited && noMenu.MainWindowHandle != IntPtr.Zero,
+                    "Fail-closed packaged shutdown must not hide or terminate the visible desktop.");
+            }
+            StopFixture(oldExecutable);
+
+            // A packaged fixture exposing an explicit File -> Quit ChatGPT
+            // menu must be requested through that exact menu, not WM_CLOSE.
+            using (var menu = LaunchFixture(oldExecutable, "menu"))
+            {
+                await WaitForWindowAsync(oldExecutable);
+                var packaged = new DesktopController(_ =>
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")));
+                await packaged.CloseAsync(CancellationToken.None);
+                Require(FindFixture(oldExecutable) is null,
+                    "Packaged desktop must exit cleanly through File -> Quit ChatGPT.");
+            }
+
+            Console.WriteLine("PASS: versioned Store-path discovery, native window close for non-Store apps, and safe packaged File -> Quit or fail-closed behavior.");
             return 0;
         }
         catch (Exception ex)
@@ -59,6 +92,16 @@ internal static class DesktopCloseChecks
             StopFixture(newExecutable);
             SecureFiles.DeleteOwnedDirectory(Path.GetTempPath(), root);
         }
+    }
+
+    private static Process LaunchFixture(string executable, string mode)
+    {
+        var start = new ProcessStartInfo(executable) {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(executable)!
+        };
+        start.Environment["CODEX_CLOSE_FIXTURE_MODE"] = mode;
+        return Process.Start(start) ?? throw new IOException("Could not start isolated desktop fixture.");
     }
 
     private static void CopyFixture(string executable, string destination)

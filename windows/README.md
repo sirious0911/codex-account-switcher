@@ -25,7 +25,7 @@ The account switcher is **one Windows EXE**; it runs in the background and hosts
 
 macOS calls the module directly through its SwiftUI model. Windows starts a bundled `SwitcherHost.exe` child and receives presentation snapshots. Credentials never cross that UI protocol. Windows adapters implement file ACLs/atomic replacement, Desktop discovery and normal close/open, browser opening, tray and startup integration.
 
-Desktop is located from the `OpenAI.Codex` Store manifest (its executable can be `ChatGPT.exe`) and common per-user installation paths. Matching uses the full executable path. Existing CLI sessions are not closed. If Desktop cannot exit normally within 30 seconds, switching stops before credentials are changed.
+Desktop is located from the `OpenAI.Codex` Store manifest (its executable can be `ChatGPT.exe`) and common per-user installation paths. Matching uses its signed package identity when available, otherwise the full executable path. Existing CLI sessions are not closed. **Windows Store Codex can treat its window X/WM_CLOSE as hide-to-background, not a full quit.** At an account-switch request, the Windows adapter first looks for the application's exact **File → Quit ChatGPT** menu through UI Automation and invokes it only if the verified app exposes it. If no actionable menu is visible (as observed on the user's current installed Store build), it **does not send X or terminate the process**: switching stops before touching credentials and instructs the user to quit from the Codex menu manually, then retry. Non-Store desktop executables continue to use the verified normal window-close method. Neither path force-kills the Codex Desktop process. The 30-second wait applies only after an actual graceful quit request.
 
 ## Storage
 

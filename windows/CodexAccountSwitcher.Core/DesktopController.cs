@@ -108,16 +108,38 @@ public sealed class DesktopController(Func<CancellationToken, Task<DesktopInstal
         {
             if (initial.Count == 0) return;
             var requested = false;
-            foreach (var process in initial)
+            if (installation.AppUserModelId is not null)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (!process.HasExited && process.MainWindowHandle != IntPtr.Zero)
+                // OpenAI.Codex's Store app may interpret X/WM_CLOSE as
+                // hide-to-background. Do not hide its only Quit menu.
+                foreach (var process in initial)
                 {
-                    if (!process.CloseMainWindow()) throw new IOException("Codex Desktop rejected the normal close request.");
-                    requested = true;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (process.HasExited || process.MainWindowHandle == IntPtr.Zero) continue;
+                    if (DesktopQuitMenu.TryInvoke(process))
+                    {
+                        requested = true;
+                        break;
+                    }
                 }
+                if (!requested)
+                    throw new IOException("Codex Desktop is still open. Use File → Quit ChatGPT from the Codex Desktop menu, wait until its background processes exit, then retry account switching. The account was not changed.");
             }
-            if (!requested) throw new IOException("Codex Desktop is running without a closable window. Quit it manually before switching.");
+            else
+            {
+                foreach (var process in initial)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!process.HasExited && process.MainWindowHandle != IntPtr.Zero)
+                    {
+                        if (!process.CloseMainWindow())
+                            throw new IOException("Codex Desktop rejected the normal close request.");
+                        requested = true;
+                    }
+                }
+                if (!requested)
+                    throw new IOException("Codex Desktop is running without a closable window. Quit it manually before switching.");
+            }
             var stopwatch = Stopwatch.StartNew();
             while (true)
             {

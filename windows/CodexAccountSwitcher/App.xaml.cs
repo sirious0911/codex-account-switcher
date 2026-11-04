@@ -1,5 +1,4 @@
 using System;
-using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -12,7 +11,6 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using CodexAccountSwitcher.Core;
 using Microsoft.Win32;
-using Forms = System.Windows.Forms;
 
 namespace CodexAccountSwitcher;
 
@@ -26,13 +24,15 @@ public partial class App : Application
     private bool ownsMutex;
     private EventWaitHandle? activateWindow;
     private RegisteredWaitHandle? activationListener;
-    private Forms.NotifyIcon? tray;
-    private Forms.ContextMenuStrip? trayMenu;
-    private Icon? icon;
-    private string? trayIconVariant;
-    private System.Drawing.Size trayIconSize;
-    private int? trayIconPercent;
+    private TaskbarQuotaPanel? taskbarPanel;
+    private AdaptiveUsageRefreshService? adaptiveUsage;
     private CoreClient? client;
+    private LocalMonitorWorker? monitorWorker;
+    // Only the confirmed active profile feeds a WPF child HWND embedded
+    // before TrayNotifyWnd, immediately to the left of the ^ chevron.
+    private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
+    private Guid? lastOtherQuotaProfile;
+    private DateTimeOffset? lastOtherQuotaReceipt;
     private MainWindow? window;
     private DispatcherTimer? updates;
     private bool exiting;
@@ -44,91 +44,102 @@ public partial class App : Application
         if (e.Args.Contains("--self-test")) { await SelfTestAsync(); return; }
         try {
             var dataPath = Environment.GetEnvironmentVariable("CODEX_SWITCHER_DATA_HOME")
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Account Switcher");
+                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Account Switcher Personal");
             var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(dataPath).ToUpperInvariant())));
             instance = new Mutex(true, @"Local\CodexAccountSwitcher-" + key, out ownsMutex);
             activateWindow = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CodexAccountSwitcher-Activate-" + key);
             if (!ownsMutex) { activateWindow.Set(); Shutdown(); return; }
             ApplyTheme();
             client = new CoreClient(HostRuntime.Resolve(Assembly.GetExecutingAssembly()), dataPath);
+            monitorWorker = new LocalMonitorWorker(dataPath);
+            client.MonitorObserved += OnMonitorObserved;
+            client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
-            window = new MainWindow(client, native); MainWindow = window;
+            window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? []); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
-            tray = new Forms.NotifyIcon { Text = "Codex Account Switcher" };
-            RefreshTrayIcon();
-            tray.Visible = true;
+            taskbarPanel = new TaskbarQuotaPanel(
+                () => { ApplyTheme(); window.OpenWindow(); },
+                () => _ = QuitAsync(),
+                () => !window.IsBusy);
+            adaptiveUsage = new AdaptiveUsageRefreshService(client);
             SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
-            trayMenu = new Forms.ContextMenuStrip();
-            var openItem = new Forms.ToolStripMenuItem("Codex Account Switcher");
-            openItem.Click += (_, _) => { ApplyTheme(); window.OpenWindow(); };
-            var quitItem = new Forms.ToolStripMenuItem();
-            quitItem.Click += (_, _) => _ = QuitAsync();
-            trayMenu.Items.Add(openItem); trayMenu.Items.Add(new Forms.ToolStripSeparator()); trayMenu.Items.Add(quitItem);
-            trayMenu.Opening += (_, _) => { quitItem.Text = client.State.Text("quit"); quitItem.Enabled = !window.IsBusy; };
-            tray.ContextMenuStrip = trayMenu;
-            tray.MouseClick += (_, args) => {
-                if (args.Button == Forms.MouseButtons.Left) { ApplyTheme(); window.OpenWindow(); }
-            };
-            client.Changed += RefreshTray;
+            client.Changed += OnClientChanged;
             await client.InitializeAsync();
+            taskbarPanel?.Start();
+            adaptiveUsage?.Start();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
             updates.Start();
             if (native.AutomaticallyCheckUpdates) _ = native.CheckUpdatesAsync();
         } catch (Exception ex) {
-            MessageBox.Show(ex.Message, "Codex Account Switcher", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(ex.Message, "Codex Account Switcher Personal", MessageBoxButton.OK, MessageBoxImage.Error);
             await QuitAsync();
         }
     }
 
-    private void RefreshTray()
+    private void OnMonitorObserved(CodexMonitorWireSample sample)
     {
-        if (client == null || tray == null) return;
-        RefreshTrayIcon();
-        var active = client.State.Accounts.FirstOrDefault(row => row.Profile.Id == client.State.ActiveAccountID);
-        var percent = ActiveTrayPercent();
-        var label = active == null ? "Codex Account Switcher" : active.Profile.DisplayName + (percent != null ? " · " + percent + "%" : "");
-        tray.Text = label.Length > 63 ? label[..63] : label;
-    }
-    private int? ActiveTrayPercent()
-    {
-        if (client?.State.Settings.ShowsMenuBarPercentage != true) return null;
-        var state = client.State;
-        var usage = state.Accounts.FirstOrDefault(row => row.Profile.Id == state.ActiveAccountID)?.Usage;
-        if (usage == null) return null;
-        return state.Settings.StatusBarUsageWindow == "fiveHour"
-            ? usage.FiveHourRemainingPercent ?? usage.RemainingPercent
-            : usage.RemainingPercent;
-    }
-    private void RefreshTrayIcon()
-    {
-        if (tray == null) return;
-        using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-        // Taskbar appearance can differ from the application's light/dark theme.
-        var variant = key?.GetValue("SystemUsesLightTheme") is int light && light != 0 ? "light" : "dark";
-        var size = Forms.SystemInformation.SmallIconSize;
-        var percent = ActiveTrayPercent();
-        if (trayIconVariant == variant && trayIconSize == size && trayIconPercent == percent) return;
-        Icon replacement;
-        if (percent is { } value) {
-            replacement = TrayUsageIcon.Create(value, variant == "light", size);
-        } else {
-            var uri = new Uri($"pack://application:,,,/Codex-Account-Switcher-windows-x64;component/tray-{variant}.ico");
-            using var resource = GetResourceStream(uri).Stream;
-            using var original = new Icon(resource, size);
-            replacement = (Icon)original.Clone();
+        try { monitorWorker?.Process(sample); }
+        catch (Exception ex) {
+            // Monitoring is supplementary: a failed local preview does not
+            // interfere with the original account-switching UI.
+            System.Diagnostics.Trace.TraceWarning("Local monitor persistence failed: " + ex.GetType().Name);
         }
-        tray.Icon = replacement;
-        icon?.Dispose(); icon = replacement;
-        trayIconVariant = variant; trayIconSize = size; trayIconPercent = percent;
+        // The local worker receives all profiles. Only confirmed active-profile
+        // observations may update the taskbar child panel.
+        if (!externalMonitorGate.Allows(sample)) return;
+        if (Dispatcher.CheckAccess()) {
+            if (sample.ProfileID is Guid id) adaptiveUsage?.ObserveFreshActiveSample(id);
+            taskbarPanel?.Accept(sample);
+        }
+        else Dispatcher.BeginInvoke(new Action(() => {
+            // Source selection must be rechecked after deferred UI dispatch.
+            if (!externalMonitorGate.Allows(sample)) return;
+            if (sample.ProfileID is Guid id) adaptiveUsage?.ObserveFreshActiveSample(id);
+            taskbarPanel?.Accept(sample);
+        }));
     }
+
+    private void OnClientChanged()
+    {
+        if (client is null) return;
+        var state = client.State;
+        if (externalMonitorGate.Observe(state)) taskbarPanel?.Invalidate();
+        // On a Free/partial plan there can be no weekly quota observation.
+        // Accept only a confirmed active profile's *actual*, newly received
+        // non-weekly quota. Do not borrow the old profile's 5H/7D metrics.
+        if (state.ActiveAccountID is Guid activeId &&
+            externalMonitorGate.ActiveProfile == activeId &&
+            state.Accounts.FirstOrDefault(x => x.Profile.Id == activeId) is { } active &&
+            active.UsageStatus == "nonWeekly" && active.NonWeeklyUsage is { } other)
+        {
+            taskbarPanel?.AcceptNonWeekly(other);
+            if ((lastOtherQuotaProfile != activeId || lastOtherQuotaReceipt != other.ObservedAt) &&
+                DateTimeOffset.UtcNow - other.ObservedAt is var age &&
+                age >= TimeSpan.FromSeconds(-30) && age <= TimeSpan.FromMinutes(6))
+            {
+                lastOtherQuotaProfile = activeId;
+                lastOtherQuotaReceipt = other.ObservedAt;
+                adaptiveUsage?.ObserveFreshActiveSample(activeId);
+            }
+        }
+        else taskbarPanel?.Refresh();
+    }
+
+    private void OnSwitchRequested()
+    {
+        externalMonitorGate.SwitchRequested();
+        if (Dispatcher.CheckAccess()) taskbarPanel?.Invalidate();
+        else Dispatcher.BeginInvoke(new Action(() => taskbarPanel?.Invalidate()));
+    }
+
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
         if (Dispatcher.HasShutdownStarted) return;
-        Dispatcher.BeginInvoke(new Action(() => { if (!exiting) RefreshTrayIcon(); }));
+        Dispatcher.BeginInvoke(new Action(() => { if (!exiting) taskbarPanel?.Refresh(); }));
     }
     private static bool IsDark() {
         using var key = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
@@ -144,8 +155,14 @@ public partial class App : Application
     private async Task QuitAsync() {
         if (exiting || window?.IsBusy == true) return;
         exiting = true; updates?.Stop();
+        adaptiveUsage?.Dispose();
         activationListener?.Unregister(null);
-        if (client != null) { client.Changed -= RefreshTray; await client.DisposeAsync(); }
+        if (client != null) {
+            client.MonitorObserved -= OnMonitorObserved;
+            client.Changed -= OnClientChanged;
+            client.SwitchRequested -= OnSwitchRequested;
+            await client.DisposeAsync();
+        }
         window?.CloseForExit();
         Shutdown();
     }
@@ -160,7 +177,21 @@ public partial class App : Application
             await core.CommandAsync("fiveHour", value: true).WaitAsync(TimeSpan.FromSeconds(10));
             if (!File.Exists(Path.Combine(root, "data", "settings.json"))) throw new IOException("Shared settings were not persisted.");
             if (File.Exists(Path.Combine(root, "active", "auth.json"))) throw new IOException("Empty startup created an unexpected credential.");
-            result += ": bundled .NET, extracted Swift runtime, shared host and isolated settings.";
+            var monitorFixture = """
+                {"accountId":"SELFTEST_ACCOUNT","ordinaryUsageAllowed":null,
+                 "rateLimitsByLimitId":{"codex":{"planType":null,"primary":{"usedPercent":30,"windowDurationMins":300,"resetsAt":1800030000},
+                 "secondary":{"usedPercent":60,"windowDurationMins":10080,"resetsAt":1800600000}}},
+                 "rateLimitResetCredits":{"availableCount":1}}
+                """;
+            var observation = new CodexMonitorWireSample(1_800_000_000_000, monitorFixture);
+            var monitor = new LocalMonitorWorker(Path.Combine(root, "data"));
+            var first = monitor.Process(observation);
+            var restored = new LocalMonitorWorker(Path.Combine(root, "data")).Process(observation);
+            if (first.EventKinds.Count != 0 || restored.EventKinds.Count != 0 ||
+                !restored.MonitorPreview.Contains("5H 70%") ||
+                !Directory.Exists(Path.Combine(root, "data", "usage-monitor")))
+                throw new IOException("Bundled local monitor state could not be restored.");
+            result += ": bundled .NET, extracted Swift runtime, shared host, isolated settings and local monitor ledger.";
         } catch (Exception ex) { result = "FAIL: " + ex; exitCode = 1; }
         finally { if (Directory.Exists(root)) SecureFiles.DeleteOwnedDirectory(Path.GetTempPath(), root); }
         if (Environment.GetEnvironmentVariable("CODEX_SWITCHER_SELF_TEST_RESULT") is { } output) File.WriteAllText(output, result);
@@ -168,9 +199,8 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e) {
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
-        if (tray != null) { tray.Visible = false; tray.Dispose(); }
-        trayMenu?.Dispose();
-        icon?.Dispose();
+        taskbarPanel?.Dispose();
+        adaptiveUsage?.Dispose();
         activateWindow?.Dispose();
         if (ownsMutex) instance?.ReleaseMutex(); instance?.Dispose();
         base.OnExit(e);

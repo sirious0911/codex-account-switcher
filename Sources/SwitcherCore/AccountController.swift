@@ -1,13 +1,15 @@
 import Foundation
 
 private enum UsageRefreshResult: Sendable {
-    case success(UUID, WeeklyUsage)
+    case success(UUID, AccountUsageResult)
     case failure(UUID, String)
 }
 
 @MainActor
 open class AccountController {
     public var onChange: (@MainActor () -> Void)?
+    /// Emitted only for newly fetched usage, never for cache or stale readings.
+    public var onMonitorObservation: (@MainActor (CodexMonitorObservation) -> Void)?
     public private(set) var accounts: [AccountProfile] = [] { didSet { onChange?() } }
     public private(set) var activeAccountID: UUID? { didSet { onChange?() } }
     public private(set) var usageStates: [UUID: UsageViewState] = [:] { didSet { onChange?() } }
@@ -81,14 +83,25 @@ open class AccountController {
         }
     }
 
+    /// Regular background/manual reads refresh all registered profiles.
     public func refreshWeeklyUsage() {
+        startUsageRefresh(activeOnly: false)
+    }
+
+    /// Fast Windows activity polling reads only the confirmed active profile.
+    /// This does not change account selection, credentials, or login state.
+    public func refreshActiveUsage() {
+        startUsageRefresh(activeOnly: true)
+    }
+
+    private func startUsageRefresh(activeOnly: Bool) {
         if isBackgroundUsageRefreshEnabled {
             scheduleNextWeeklyUsageRefresh()
         }
         guard !isMutating, usageRefreshTask == nil else { return }
         usageRefreshTask = Task { [weak self] in
             guard let self else { return }
-            await self.performWeeklyUsageRefresh()
+            await self.performWeeklyUsageRefresh(activeOnly: activeOnly)
             self.usageRefreshTask = nil
             self.scheduleResetExpiryCheck()
         }
@@ -140,7 +153,7 @@ open class AccountController {
         }
     }
 
-    private func performWeeklyUsageRefresh() async {
+    private func performWeeklyUsageRefresh(activeOnly: Bool) async {
         guard !Task.isCancelled else { return }
         do {
             try await syncActiveIdentity()
@@ -153,13 +166,19 @@ open class AccountController {
         }
         guard !Task.isCancelled else { return }
         await refreshSubscriptionSnapshots()
+        // Select AFTER synchronizing the live credential. A session imported
+        // or changed outside this app must never let a fast request touch the
+        // previously active profile or every inactive profile.
+        let targets = activeOnly
+            ? accounts.filter { $0.id == activeAccountID && activeIdentityConfirmed }
+            : accounts
         await withTaskGroup(of: UsageRefreshResult.self) { group in
-            for account in accounts {
+            for account in targets {
                 group.addTask { [store, codex] in
                     do {
                         let home = await store.profileHome(id: account.id)
                         try Task.checkCancellation()
-                        return .success(account.id, try await codex.readWeeklyUsage(profileHome: home))
+                        return .success(account.id, try await codex.readUsage(profileHome: home))
                     } catch {
                         return .failure(account.id, error.localizedDescription)
                     }
@@ -168,20 +187,37 @@ open class AccountController {
             for await result in group {
                 guard !Task.isCancelled else { continue }
                 switch result {
-                case let .success(id, usage):
+                case let .success(id, fetched):
                     guard let account = accounts.first(where: { $0.id == id }) else { continue }
-                    usageStates[id] = .loaded(usage)
-                    do {
-                        try await store.cacheWeeklyUsage(usage, profileID: id)
-                    } catch {
-                        showError(error)
+                    switch fetched {
+                    case let .weekly(usage):
+                        usageStates[id] = .loaded(usage)
+                        if let observation = CodexMonitorPayloadEncoder.encode(
+                            profile: account, usage: usage,
+                            planType: usage.planType,
+                            ordinaryUsageAllowed: usage.ordinaryUsageAllowed, observedAt: Date()
+                        ) {
+                            onMonitorObservation?(observation)
+                        }
+                        do {
+                            try await store.cacheWeeklyUsage(usage, profileID: id)
+                        } catch {
+                            showError(error)
+                        }
+                        await observeResetExpiry(profile: account, usage: usage)
+                    case let .nonWeekly(usage):
+                        // Real plan-specific quota, e.g. Free 30D. Preserve
+                        // the exact label in account UI and NEVER publish this
+                        // as a synthetic 5H/7D taskbar observation.
+                        usageStates[id] = .nonWeekly(usage)
                     }
-                    await observeResetExpiry(profile: account, usage: usage)
                 case let .failure(id, message):
                     guard let account = accounts.first(where: { $0.id == id }) else { continue }
                     await observeResetExpiry(profile: account, usage: nil, error: message)
                     if let cached = usageStates[id]?.displayedUsage {
                         usageStates[id] = .stale(cached, message)
+                    } else if let alternate = usageStates[id]?.nonWeeklyUsage {
+                        usageStates[id] = .staleNonWeekly(alternate, message)
                     } else {
                         usageStates[id] = .unavailable(message)
                     }
@@ -193,6 +229,10 @@ open class AccountController {
     public func switchAccount(to id: UUID) async {
         guard !isMutating else { return }
         isMutating = true
+        // Clear only the previous operation's error. A failure in this switch
+        // still installs its own error, and the active-only monitor remains
+        // closed while isMutating is true.
+        visibleError = nil
         await cancelUsageRefresh()
         defer { isMutating = false; refreshWeeklyUsage() }
         do {

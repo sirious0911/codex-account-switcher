@@ -38,7 +38,179 @@ internal static class Program
             Assert(NativeSettings.LatestWindowsVersion(macOnly.RootElement) == null, "A release without a Windows EXE must never prompt a Windows update.");
             Directory.CreateDirectory(output);
             var app = new App(false); app.InitializeComponent();
+            var appFields = typeof(App).GetFields(
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic);
+            Assert(appFields.Any(f => f.FieldType == typeof(TaskbarQuotaPanel)) &&
+                !appFields.Any(f => f.FieldType == typeof(TrayQuotaIcons)) &&
+                !appFields.Any(f => f.FieldType == typeof(IntegratedMiniBarWindow)),
+                "Normal app startup must own a taskbar child host, not floating or overflow-tray displays.");
+            Assert(TaskbarQuotaPanel.Placement ==
+                Deskband11Lib.Core.TaskbarContentPlacement.BeforeNotificationArea &&
+                TaskbarQuotaPanel.PreferredWidth == 166 &&
+                TaskbarQuotaPanel.PreferredHeight == 48 &&
+                TaskbarQuotaPanel.IndicatorHeight == 30,
+                "The hosted HWND must span the taskbar row while the smaller quota strip stays vertically centered, immediately LEFT of ^.");
+            Assert(appFields.Any(f => f.FieldType == typeof(AdaptiveUsageRefreshService)),
+                "Adaptive work polling must be owned by the same Windows app, not a second process.");
+            // Metadata-only recent-session detection: never inspect login or transcript bytes.
+            var syntheticHome = Path.Combine(output, "adaptive-work-fixture");
+            var exampleDay = DateTimeOffset.UtcNow;
+            var dayFolder = Path.Combine(syntheticHome, "sessions",
+                exampleDay.Year.ToString("0000"), exampleDay.Month.ToString("00"),
+                exampleDay.Day.ToString("00"));
+            Directory.CreateDirectory(dayFolder);
+            var rollout = Path.Combine(dayFolder, "rollout-synthetic.jsonl");
+            var unrelated = Path.Combine(dayFolder, "unrelated.txt");
+            File.WriteAllText(rollout, "content-is-not-used-in-activity-detection");
+            File.WriteAllText(unrelated, "test");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddSeconds(-40));
+            Assert(CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Recent Codex rollout metadata should count as possible work.");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddMinutes(-4));
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Old rollout activity should not hold one-minute polling forever.");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddMinutes(2));
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Future timestamps must not falsely trigger active polling.");
+            File.Delete(rollout);
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Non-rollout file changes are not Codex task evidence.");
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(
+                Path.Combine(output, "missing-user-codex-home"), exampleDay),
+                "Missing session files fail idle without blocking the app.");
+            Assert(CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "ChatGPT", @"C:\Program Files\WindowsApps\OpenAI.Codex_0.1_x64__fixture\ChatGPT.exe"),
+                "Official Windows Codex Desktop can use ChatGPT.exe as its manifest binary.");
+            Assert(CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "Codex", @"C:\Program Files\WindowsApps\OpenAI.Codex_0.1_x64__fixture\Codex.exe"),
+                "Official Codex executable is also accepted when package path matches.");
+            Assert(!CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "ChatGPT", @"C:\Program Files\ChatGPT\ChatGPT.exe"),
+                "Unrelated ChatGPT application must not count as active Codex work.");
+            Assert(!CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "Codex", @"C:\Tools\unrelated\Codex.exe"),
+                "A process name alone never authorizes higher-frequency API polling.");
+
+            using (var taskbar = new TaskbarQuotaPanel(() => {}, () => {}, () => true))
+            {
+                Assert(taskbar.CurrentReadout.FiveHourRemaining == null &&
+                    taskbar.CurrentReadout.ResetCreditsAvailable == null,
+                    "Fresh taskbar host must not invent account quota values.");
+                taskbar.Invalidate();
+                Assert(taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
+                    "Switch or host error must clear the embedded taskbar quota surface.");
+                var free = new NonWeeklyUsage(73, 43_200,
+                    DateTimeOffset.FromUnixTimeSeconds(1_900_000_000), 0, DateTimeOffset.UtcNow);
+                taskbar.AcceptNonWeekly(free);
+                Assert(taskbar.CurrentNonWeeklyUsage?.WindowLabel == "30D" &&
+                       taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
+                    "Real Free 30D must not be published as a weekly quota.");
+                taskbar.Invalidate();
+                Assert(taskbar.CurrentNonWeeklyUsage is null,
+                    "Switch invalidation must immediately clear another account's 30D quota.");
+            }
+            var iconSize = new System.Drawing.Size(16, 16);
+            using (var fiveIcon = TrayUsageIcon.CreateMetric("5H", "85", false,
+                iconSize, MiniBarDisplayStatus.FreshUnbound))
+            using (var weeklyIcon = TrayUsageIcon.CreateMetric("7D", "62", false,
+                iconSize, MiniBarDisplayStatus.FreshUnbound))
+            using (var resetIcon = TrayUsageIcon.CreateMetric("R", "?", true,
+                iconSize, MiniBarDisplayStatus.Unknown))
+            {
+                Assert(fiveIcon.Width == 16 && weeklyIcon.Height == 16 &&
+                    resetIcon.Width == 16,
+                    "Three compact native metric icon drawings must be available.");
+            }
             var client = new FixtureClient();
+
+            // The new in-app minibar is shown by the SAME tray owner. No
+            // Codex runtime, Named Pipe listener or account login is used.
+            var mini = new IntegratedMiniBarWindow(() => {});
+            Assert(!mini.ShowInTaskbar && !mini.Topmost &&
+                Math.Abs(mini.Width - 360) < 0.1 && Math.Abs(mini.Height - 52) < 0.1,
+                "The integrated minibar must be 360x52 DIP, borderless and taskbar-adjacent.");
+            Assert(mini.DisplayFrame.FiveHourRemaining == null,
+                "No synthetic or cached usage must appear before the first active sample.");
+            Render(mini, Path.Combine(output, "integrated-minibar-unknown.png"));
+            Assert(mini.LastDock is not null,
+                "Integrated WPF must invoke native window placement on initialization.");
+            if (mini.LastDock!.Placement.FitsInsideWorkArea)
+            {
+                Assert(mini.LastDock.Success &&
+                    mini.LastDock.ActualRectInsideWorkArea &&
+                    mini.LastDock.TargetDpi >= 96,
+                    "Native placement must verify actual window rectangle and target monitor DPI.");
+                Console.WriteLine("PASS: integrated native dock targetDpi=" +
+                    mini.LastDock.TargetDpi + ", physicalRectInside=" +
+                    mini.LastDock.ActualRectInsideWorkArea);
+            }
+            else Console.WriteLine("SKIP: native dock skipped for undersized CI work area.");
+            var physicalScreens = System.Windows.Forms.Screen.AllScreens;
+            Console.WriteLine("INFO: physical display count=" + physicalScreens.Length);
+            Assert(mini.SelectScreen(Array.Empty<System.Windows.Forms.Screen>()) is null,
+                "Transient zero-display re-enumeration must return no target, not throw.");
+            if (physicalScreens.Length != 0)
+                Assert(mini.SelectScreen(physicalScreens) != null,
+                    "A stable connected display snapshot must resolve a docking target.");
+            var selectorMenu = mini.ContextMenu!.Items.OfType<MenuItem>().First(item =>
+                (string?)item.Header == "표시 모니터 선택");
+            Assert(selectorMenu.Items.Count == physicalScreens.Length,
+                "The integrated minibar monitor menu must enumerate the actual connected screens.");
+            foreach (var screen in physicalScreens)
+            {
+                var selectable = selectorMenu.Items.OfType<MenuItem>().Single(item =>
+                    ((string)item.Header).StartsWith(screen.DeviceName,
+                        StringComparison.Ordinal));
+                selectable.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                var selectedDock = mini.LastDock ??
+                    throw new Exception("The monitor menu must re-run native docking on selection.");
+                if (selectedDock.Placement.FitsInsideWorkArea)
+                {
+                    Assert(selectedDock.Success && selectedDock.ActualRectInsideWorkArea,
+                        "Each usable monitor must report a verified physical WPF window rectangle.");
+                    double windowWidthPx = Math.Round(mini.Width * selectedDock.TargetDpi / 96.0);
+                    double windowHeightPx = Math.Round(mini.Height * selectedDock.TargetDpi / 96.0);
+                    Assert(selectedDock.PixelLeft >= screen.WorkingArea.Left - 2 &&
+                        selectedDock.PixelTop >= screen.WorkingArea.Top - 2 &&
+                        selectedDock.PixelLeft + windowWidthPx <= screen.WorkingArea.Right + 2 &&
+                        selectedDock.PixelTop + windowHeightPx <= screen.WorkingArea.Bottom + 2,
+                        "Window coordinates must stay within the selected physical monitor work area.");
+                    Console.WriteLine("PASS: native monitor selection, targetDpi=" +
+                        selectedDock.TargetDpi + ", work-area verified");
+                }
+                else Console.WriteLine("SKIP: selected monitor work area too small for minibar.");
+            }
+            var uiNow = DateTimeOffset.UtcNow;
+            const string miniRaw = """
+                {"accountId":"ui-fixture","ordinaryUsageAllowed":null,
+                 "rateLimitsByLimitId":{"codex":{"planType":null,
+                   "primary":{"usedPercent":15,"windowDurationMins":300},
+                   "secondary":{"usedPercent":38,"windowDurationMins":10080}}},
+                 "rateLimitResetCredits":{"availableCount":2}}
+                """;
+            mini.Accept(new CodexMonitorWireSample(uiNow.ToUnixTimeMilliseconds(), miniRaw));
+            var miniFrame = mini.DisplayFrame;
+            Assert(miniFrame.FiveHourRemaining == 85 && miniFrame.WeeklyRemaining == 62 &&
+                miniFrame.ResetCreditsAvailable == 2 && !miniFrame.AccountVerified &&
+                !miniFrame.EventsAllowed && !miniFrame.TelegramAllowed,
+                "In-app WPF should render all three fresh quota values without trusting account identity.");
+            Assert(mini.ToolTip is string freshTip && freshTip.Contains("계정 미확인") &&
+                freshTip.Contains("5H 잔여: 85%") && freshTip.Contains("리셋권: 2"),
+                "Integrated UI must explain source uncertainty and quota details.");
+            Render(mini, Path.Combine(output, "integrated-minibar-fresh.png"));
+            mini.Invalidate();
+            Assert(mini.DisplayFrame.FiveHourRemaining == null &&
+                mini.DisplayFrame.ResetCreditsAvailable == null &&
+                mini.ToolTip is string staleTip && staleTip.Contains("UNKNOWN"),
+                "Account switch or host failure must immediately clear the visible quota values.");
+            Render(mini, Path.Combine(output, "integrated-minibar-invalidated.png"));
+            mini.Hide();
+            Assert(!mini.IsVisible, "Integrated minibar must hide without exiting the account application.");
+            mini.ShowFromTray();
+            Assert(mini.IsVisible, "Existing tray can reopen the same minibar window.");
+            mini.CloseForExit();
+
             var window = new MainWindow(client);
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)
@@ -115,7 +287,9 @@ internal static class Program
             Assert(!All<TextBlock>(window).Any(text => text.Text is "保存" or "Save"), "Settings must not have a Save flow.");
             client.State = client.State with { Settings = client.State.Settings with { ShowsFiveHourUsage = true, AutoResetEnabled = true } };
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-auto-reset-enabled-zh.png"));
-            Assert(All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
+            var enabledToggles = All<CheckBox>(window).ToArray();
+            if (!enabledToggles.Any(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset"))) throw new Exception("Settings toggle absent: page=" + window.CurrentPage + "; total=" + enabledToggles.Length + "; names=" + string.Join(", ", enabledToggles.Select(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle))) + "; expected=" + client.State.Text("auto_reset"));
+            Assert(enabledToggles.Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
                 "The auto-reset toggle must reflect the persisted setting.");
             window.Navigate("accounts"); Render(window, Path.Combine(output, "accounts-five-hour-zh.png"));
             Assert(All<TextBlock>(window).Count(text => text.Text == "5 小时") == 2, "Five-hour view must be per account.");
@@ -141,11 +315,60 @@ internal static class Program
             client.State = client.State with { IsMutating = false };
             window.CloseForExit();
             Assert(closed, "Explicit application exit must release the window.");
+            VerifyMonitorPage(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyMonitorPage(string output)
+    {
+        var client = new FixtureClient();
+        var history = new LocalMonitorHistoryRow(
+            "a1b2c3d4", "CREDIT_INCREASE", "credits",
+            DateTimeOffset.FromUnixTimeSeconds(1_800_000_000),
+            1, 2, true);
+        var window = new MainWindow(client, monitorHistory: () => new[] { history });
+        Render(window, Path.Combine(output, "monitor-account-list-zh.png"));
+        var commandsBefore = client.Commands.Count;
+        var untouched = client.State;
+        var monitorButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == client.State.Text("monitor_title"));
+        monitorButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert(window.CurrentPage == "monitor" && client.Commands.Count == commandsBefore,
+            "Opening the monitor must not issue a change or sign-in command.");
+        Render(window, Path.Combine(output, "monitor-zh.png"));
+        var texts = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(texts.Any(text => text.Contains("personal@example.test")) &&
+               texts.Any(text => text.Contains("studio@example.test")),
+            "Monitor must show both account snapshot rows.");
+        Assert(texts.Count(text => text == "5 小时") == 2 &&
+               texts.Count(text => text == "7 天") == 2,
+            "Monitor must display both quota windows independent of the home toggle.");
+        Assert(texts.Contains("重置次数: 2") && texts.Contains("重置次数: 未知"),
+            "Reset credits must distinguish reported quantity and UNKNOWN.");
+        Assert(texts.Any(text => text.Contains(client.State.Text("monitor_credit_increase"))),
+            "The monitor should show persisted mock event history when available.");
+        Assert(All<TextBlock>(window).Any(text => text.ToolTip is string tip &&
+            tip.Contains("a1b2c3d4") && tip.Contains(client.State.Text("monitor_mock_complete"))),
+            "Historical entries must show their mock-only delivery status.");
+        var unavailable = untouched.Accounts[1] with {
+            Usage = null, UsageStatus = "error", UsageError = "fixture refresh failed"
+        };
+        client.State = untouched with { Accounts = new[] { untouched.Accounts[0], unavailable } };
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "monitor-unavailable-zh.png"));
+        var missing = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(missing.Contains("5 小时: 未知") && missing.Contains("7 天: 未知"),
+            "Unreported quota windows must display UNKNOWN, not 0%.");
+        var refreshButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == client.State.Text("monitor_refresh"));
+        refreshButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert(client.Commands.SequenceEqual(new[] { "refresh:" }),
+            "Refresh must use the existing usage-refresh command, not an account switch.");
+        window.CloseForExit();
+    }
+
     private static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     private static IEnumerable<T> All<T>(DependencyObject parent) where T : DependencyObject {
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) {
@@ -174,7 +397,8 @@ internal static class Program
                     "loaded", new(new DateTimeOffset(2099, 10, 17, 12, 0, 0, TimeSpan.Zero), time)),
                 new(new(Guid.Parse("22222222-2222-2222-2222-222222222222"), "Studio", "studio@example.test"), "S", new(56, time.AddHours(1), 68, time.AddHours(-1)), null)
             ], id, new("simplifiedChinese"), false, false, true, null, new() {
-                ["usage"] = "用量", ["resets"] = "重置于", ["reset_credits"] = "重置次数", ["unknown"] = "未知", ["left"] = "% 剩余", ["manage"] = "管理账号", ["settings"] = "设置", ["quit"] = "退出应用",
+                ["monitor_title"] = "用量监控", ["monitor_source_hint"] = "从现有服务读取的用量快照。", ["monitor_refresh"] = "刷新用量",
+                ["monitor_last_known"] = "上次记录的数据。", ["usage"] = "用量", ["resets"] = "重置于", ["reset_credits"] = "重置次数", ["unknown"] = "未知", ["left"] = "% 剩余", ["manage"] = "管理账号", ["settings"] = "设置", ["quit"] = "退出应用",
                 ["subscription_until"] = "有效期：%@", ["subscription_snapshot"] = "登录快照", ["subscription_old_snapshot"] = "旧登录快照",
                 ["subscription_unknown"] = "有效期：未知", ["subscription_detail"] = "最近核验于 %@。",
                 ["accounts"] = "账号", ["back"] = "返回", ["active"] = "当前", ["remove"] = "移除", ["add_account"] = "添加账号",

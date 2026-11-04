@@ -11,14 +11,14 @@ namespace CodexAccountSwitcher;
 
 public sealed class NativeSettings
 {
-    private const string Key = @"Software\CodexAccountSwitcher";
+    private const string Key = @"Software\Sirious0911\CodexAccountSwitcher";
     private const string Run = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public string Version => typeof(NativeSettings).Assembly.GetName().Version!.ToString(3);
     public bool LaunchAtLogin {
-        get { using var key = Registry.CurrentUser.OpenSubKey(Run); return key?.GetValue("CodexAccountSwitcher") is string; }
+        get { using var key = Registry.CurrentUser.OpenSubKey(Run); return key?.GetValue("CodexAccountSwitcherPersonal") is string; }
         set { using var key = Registry.CurrentUser.CreateSubKey(Run);
-            if (value) key.SetValue("CodexAccountSwitcher", "\"" + Environment.ProcessPath + "\" --background");
-            else key.DeleteValue("CodexAccountSwitcher", false); }
+            if (value) key.SetValue("CodexAccountSwitcherPersonal", "\"" + Environment.ProcessPath + "\" --background");
+            else key.DeleteValue("CodexAccountSwitcherPersonal", false); }
     }
     public bool AutomaticallyCheckUpdates {
         get { using var key = Registry.CurrentUser.OpenSubKey(Key); return key?.GetValue("AutomaticallyCheckUpdates") is not int number || number != 0; }
@@ -38,13 +38,13 @@ public sealed class NativeSettings
             Version? latest = null;
             for (var page = 1; ; page++) {
                 using var document = JsonDocument.Parse(await http.GetStringAsync(
-                    "https://api.github.com/repos/liuzhao1225/codex-account-switcher/releases?per_page=100&page=" + page));
+                    "https://api.github.com/repos/sirious0911/codex-account-switcher/releases?per_page=100&page=" + page));
                 var candidate = LatestWindowsVersion(document.RootElement);
                 if (candidate != null && (latest == null || candidate > latest)) latest = candidate;
                 if (document.RootElement.GetArrayLength() < 100) break;
             }
             UpdatePage = latest != null && latest > new Version(Version)
-                ? new Uri("https://github.com/liuzhao1225/codex-account-switcher/releases/tag/v" + latest.ToString(3)) : null;
+                ? new Uri("https://github.com/sirious0911/codex-account-switcher/releases/tag/v" + latest.ToString(3)) : null;
         } catch (Exception) { UpdateError = "update_check_failed"; }
         finally { IsChecking = false; Changed?.Invoke(); }
     }

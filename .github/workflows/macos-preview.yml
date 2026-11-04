@@ -1,0 +1,53 @@
+name: macOS personal-fork preview build
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - "assets/**"
+      - "scripts/package-local-app.sh"
+      - "scripts/sparkle-public-key.txt"
+      - ".github/workflows/macos-preview.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: local-macos-app-preview
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build ad-hoc-signed local macOS bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/package-local-app.sh
+          app="$(swift build -c release --show-bin-path)/Codex Account Switcher Personal.app"
+          test -x "$app/Contents/MacOS/CodexAccountSwitcher"
+          /usr/bin/codesign --verify --deep --strict "$app"
+          /usr/bin/plutil -extract SUFeedURL raw -o - "$app/Contents/Info.plist" |
+            grep -Fx "https://sirious0911.github.io/codex-account-switcher/updates/macos/appcast.xml"
+          /usr/bin/plutil -extract CFBundleIdentifier raw -o - "$app/Contents/Info.plist" |
+            grep -Fx "com.sirious0911.codex-account-switcher"
+          test -f "$app/Contents/Resources/LICENSE.txt"
+          mkdir -p .build/preview
+          /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$app" .build/preview/Codex-Account-Switcher-macos-adhoc-preview.zip
+          cd .build/preview
+          shasum -a 256 Codex-Account-Switcher-macos-adhoc-preview.zip > Codex-Account-Switcher-macos-adhoc-preview.zip.sha256
+          shasum -a 256 -c Codex-Account-Switcher-macos-adhoc-preview.zip.sha256
+      - name: Upload temporary preview artifact only
+        uses: actions/upload-artifact@v4
+        with:
+          name: Codex-Account-Switcher-macos-adhoc-preview
+          path: |
+            .build/preview/Codex-Account-Switcher-macos-adhoc-preview.zip
+            .build/preview/Codex-Account-Switcher-macos-adhoc-preview.zip.sha256
+          if-no-files-found: error
+          retention-days: 14

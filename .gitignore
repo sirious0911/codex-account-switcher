@@ -10,3 +10,5 @@ env.txt
 windows/**/bin/
 windows/**/obj/
 windows/artifacts/
+monitor/**/bin/
+monitor/**/obj/

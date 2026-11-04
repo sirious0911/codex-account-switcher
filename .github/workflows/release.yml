@@ -80,7 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           certificate_path="$RUNNER_TEMP/build-certificate.p12"
-          api_key_path="$RUNNER_TEMP/AuthKey.p8"
+          api_key_path= [REDACTED_SECRET]
           intermediate_path="$RUNNER_TEMP/DeveloperIDG2CA.cer"
           keychain_path="$RUNNER_TEMP/app-signing.keychain-db"
           keychain_password="$(uuidgen)"
@@ -152,11 +152,11 @@ jobs:
           spctl --assess --type execute --verbose=4 "$app_path"
 
           mkdir -p "$dmg_root"
-          ditto "$app_path" "$dmg_root/Codex Account Switcher.app"
+          ditto "$app_path" "$dmg_root/Codex Account Switcher Personal.app"
           cp LICENSE "$dmg_root/LICENSE.txt"
           ln -s /Applications "$dmg_root/Applications"
           hdiutil create \
-            -volname "Codex Account Switcher" \
+            -volname "Codex Account Switcher Personal" \
             -srcfolder "$dmg_root" \
             -format UDZO \
             "$artifact"
@@ -183,9 +183,11 @@ jobs:
           mkdir -p "$mount_point"
           hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" "$artifact"
           mount_attached=true
-          mounted_app="$mount_point/Codex Account Switcher.app"
+          mounted_app="$mount_point/Codex Account Switcher Personal.app"
           mounted_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$mounted_app/Contents/Info.plist")
           test "$mounted_version" = "$RELEASE_VERSION"
+          mounted_bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$mounted_app/Contents/Info.plist")
+          test "$mounted_bundle_id" = "com.sirious0911.codex-account-switcher"
           mounted_build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$mounted_app/Contents/Info.plist")
           test "$mounted_build" = "$RELEASE_VERSION"
           mounted_icon=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$mounted_app/Contents/Info.plist")

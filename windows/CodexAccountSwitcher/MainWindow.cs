@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
@@ -16,6 +17,7 @@ public sealed class MainWindow : Window
 {
     private readonly IAccountClient client;
     private readonly NativeSettings native;
+    private readonly Func<IReadOnlyList<LocalMonitorHistoryRow>> history;
     private string page = "accounts";
     private AccountRow? target;
     private string? localError;
@@ -26,11 +28,13 @@ public sealed class MainWindow : Window
     private string T(string key) => State.Text(key);
     private Brush B(string key) => (Brush)FindResource(key);
 
-    public MainWindow(IAccountClient client, NativeSettings? native = null)
+    public MainWindow(IAccountClient client, NativeSettings? native = null,
+        Func<IReadOnlyList<LocalMonitorHistoryRow>>? monitorHistory = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
+        history = monitorHistory ?? (() => []);
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
-        Title = "Codex Account Switcher"; Width = 420; SizeToContent = SizeToContent.Height;
+        Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
         Background = B("Surface"); ShowInTaskbar = true;
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
@@ -93,6 +97,11 @@ public sealed class MainWindow : Window
         if (page == "accounts") {
             var commands = new StackPanel { Orientation = Orientation.Horizontal };
             commands.Children.Add(Button(T("manage"), () => Navigate("manage"), "\uE716"));
+            var monitorButton = Button("", () => Navigate("monitor"), "\uE9CE");
+            monitorButton.Margin = new Thickness(8, 0, 0, 0);
+            monitorButton.ToolTip = T("monitor_title");
+            AutomationProperties.SetName(monitorButton, T("monitor_title"));
+            commands.Children.Add(monitorButton);
             var settings = Button("", () => Navigate("settings"), "\uE713");
             settings.Margin = new Thickness(8, 0, 0, 0); settings.ToolTip = T("settings");
             AutomationProperties.SetName(settings, T("settings"));
@@ -112,12 +121,13 @@ public sealed class MainWindow : Window
             AutomationProperties.SetName(header.Children[0], T("back"));
             var title = target != null && page is "switch" or "remove"
                 ? T(page + "_title").Replace("%@", target.Profile.DisplayName)
-                : T(page == "settings" ? "settings" : "accounts");
+                : T(page == "settings" ? "settings" : page == "monitor" ? "monitor_title" : "accounts");
             var heading = Text(title, 20, bold: true); heading.Margin = new Thickness(12, 0, 0, 0); header.Children.Add(heading);
             body.Children.Add(header);
         }
         if (page is "switch" or "remove") Confirmation(body);
         else if (page == "settings") Settings(body);
+        else if (page == "monitor") Monitor(body);
         else Accounts(body, page == "manage");
         Content = new Border { Background = B("Surface"),
             Child = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
@@ -151,12 +161,22 @@ public sealed class MainWindow : Window
                     details.Children.Add(UsageLine(T(State.Settings.ShowsFiveHourUsage ? "weekly" : "usage"), usage.RemainingPercent,
                         State.Settings.ShowsFiveHourUsage ? Reset(usage.ResetsAt) : null));
                     details.ToolTip = row.UsageError;
-                } else { var missing = Text(row.UsageStatus == "idle" ? T("usage") + " —" : T("usage_unavailable"), 10.5, muted: true); missing.ToolTip = row.UsageError; details.Children.Add(missing); }
+                } else if (row.NonWeeklyUsage is { } other) {
+                    // Free may expose 30D but no weekly / five-hour window.
+                    // Show the provider's exact duration rather than a fake 7D.
+                    details.Children.Add(UsageLine(other.WindowLabel, other.RemainingPercent,
+                        Reset(other.ResetsAt)));
+                    details.ToolTip = row.UsageError;
+                } else {
+                    var missing = Text(row.UsageStatus == "idle" ? T("usage") + " —" : T("usage_unavailable"), 10.5, muted: true);
+                    missing.ToolTip = row.UsageError; details.Children.Add(missing);
+                }
                 var accountInfo = new Grid();
                 accountInfo.ColumnDefinitions.Add(new ColumnDefinition());
                 accountInfo.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-                if (row.Usage is { } infoUsage) {
-                    var resetCredits = Text(T("reset_credits") + ": " + (infoUsage.ResetCreditsRemaining?.ToString(CultureInfo.CurrentCulture) ?? T("unknown")), 10.5, muted: true);
+                if (row.Usage is not null || row.NonWeeklyUsage is not null) {
+                    var remaining = row.Usage?.ResetCreditsRemaining ?? row.NonWeeklyUsage?.ResetCreditsRemaining;
+                    var resetCredits = Text(T("reset_credits") + ": " + (remaining?.ToString(CultureInfo.CurrentCulture) ?? T("unknown")), 10.5, muted: true);
                     resetCredits.Margin = new Thickness(8, 0, 0, 0);
                     Grid.SetColumn(resetCredits, 1); accountInfo.Children.Add(resetCredits);
                 }
@@ -233,6 +253,56 @@ public sealed class MainWindow : Window
         var confirm = Button(T(command), () => { Navigate(command == "remove" ? "manage" : "accounts"); _ = Run(command, id); });
         confirm.Margin = new Thickness(8, 0, 0, 0); confirm.BorderBrush = B("Accent"); confirm.IsDefault = true; buttons.Children.Add(confirm); content.Children.Add(buttons); body.Children.Add(content);
     }
+    private void Monitor(StackPanel body)
+    {
+        var content = new StackPanel { Margin = new Thickness(20, 0, 20, 20) };
+        var note = Text(T("monitor_source_hint"), 11, muted: true);
+        note.TextWrapping = TextWrapping.Wrap;
+        note.Margin = new Thickness(0, 0, 0, 12);
+        content.Children.Add(note);
+        var rows = MonitorOverview.From(State);
+        if (rows.Count == 0) content.Children.Add(Text(T("no_accounts"), 12, muted: true));
+        foreach (var row in rows) {
+            var section = new StackPanel { Margin = new Thickness(0, 0, 0, 15) };
+            section.Children.Add(Text(row.AccountLabel + (row.IsActive ? " · " + T("active") : ""), 13, bold: true));
+            if (row.HasUsageError) {
+                var status = Text(T("monitor_last_known"), 10.5, muted: true);
+                status.Margin = new Thickness(0, 3, 0, 0);
+                section.Children.Add(status);
+            }
+            if (row.FiveHourRemainingPercent is { } five && row.FiveHourResetsAt is { } fiveReset)
+                section.Children.Add(UsageLine(T("five_hour"), five, Reset(fiveReset)));
+            else section.Children.Add(Text(T("five_hour") + ": " + T("unknown"), 11, muted: true));
+            if (row.WeeklyRemainingPercent is { } week && row.WeeklyResetsAt is { } weekReset)
+                section.Children.Add(UsageLine(T("weekly"), week, Reset(weekReset)));
+            else section.Children.Add(Text(T("weekly") + ": " + T("unknown"), 11, muted: true));
+            var credits = Text(T("reset_credits") + ": " +
+                (row.ResetCreditsRemaining?.ToString(CultureInfo.CurrentCulture) ?? T("unknown")), 11, muted: true);
+            credits.Margin = new Thickness(0, 4, 0, 0);
+            section.Children.Add(credits);
+            content.Children.Add(section);
+        }
+        var historyHeading = Text(T("monitor_history"), 13, bold: true);
+        historyHeading.Margin = new Thickness(0, 12, 0, 8);
+        content.Children.Add(historyHeading);
+        var events = history();
+        if (events.Count == 0) content.Children.Add(Text(T("monitor_history_empty"), 11, muted: true));
+        foreach (var ev in events) {
+            var kind = ev.EventKind switch {
+                "CREDIT_INCREASE" => T("monitor_credit_increase"),
+                "EARLY_RECOVERY_SUSPECTED" => T("monitor_early_recovery"),
+                "SCHEDULED_RESET" => T("monitor_scheduled_reset"),
+                _ => ev.EventKind
+            };
+            var label = Text(kind + " · " + ev.ObservedAt.ToLocalTime().ToString("MM-dd HH:mm", CultureInfo.CurrentCulture), 11);
+            label.ToolTip = ev.AccountReference + " · " + T(ev.MockCompleted ? "monitor_mock_complete" : "monitor_mock_pending");
+            label.Margin = new Thickness(0, 4, 0, 0);
+            content.Children.Add(label);
+        }
+        content.Children.Add(Button(T("monitor_refresh"), () => _ = Run("refresh"), "\uE72C", left: true));
+        body.Children.Add(content);
+    }
+
     private void Settings(StackPanel body)
     {
         var settings = new StackPanel { Margin = new Thickness(20, 0, 20, 20) };
@@ -261,7 +331,7 @@ public sealed class MainWindow : Window
         var experimentHint = Text(T("auto_reset_hint"), 10.5, muted: true); experimentHint.TextWrapping = TextWrapping.Wrap; settings.Children.Add(experimentHint);
         settings.Children.Add(Button(T("open_reset_log"), () => {
             try {
-                var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Account Switcher");
+                var directory = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Account Switcher Personal");
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory) { UseShellExecute = true });
             } catch (Exception ex) { localError = ex.Message; Render(); }
         }));

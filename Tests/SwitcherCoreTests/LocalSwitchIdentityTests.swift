@@ -71,6 +71,69 @@ struct LocalSwitchIdentityTests {
         #expect(await fixture.desktop.calls == ["close"])
     }
 
+    @Test func twoInstalledSwitchersKeepOwnAccountFilesWhileSharingOnlySyntheticCodexLogin() async throws {
+        let fixture = try LocalSwitchFixture()
+        defer { fixture.remove() }
+        try await fixture.prepare()
+
+        let originalAppData = fixture.root.appending(path: "upstream-app-support")
+        let originalStore = AccountStore(baseURL: originalAppData, activeHomeURL: fixture.active)
+        try await originalStore.importCurrentProfile(fixture.original)
+        let preservedRegistry = try Data(contentsOf: originalAppData.appending(path: "accounts.json"))
+        let originalSavedPath = await originalStore.profileHome(id: fixture.original.id)
+            .appending(path: "auth.json")
+        let preservedProfile = try Data(contentsOf: originalSavedPath)
+
+        try await fixture.service.switchAccount(to: fixture.target.id)
+        #expect(try Data(contentsOf: fixture.active.appending(path: "auth.json"))
+                == fixture.credential(fixture.target))
+        #expect(try await fixture.store.loadRegistry().activeAccountID == fixture.target.id)
+
+        // The two UI apps have independent saved accounts and preferences.
+        // Only the intentionally shared synthetic CODEX_HOME changes.
+        #expect(try Data(contentsOf: originalAppData.appending(path: "accounts.json")) == preservedRegistry)
+        #expect(try Data(contentsOf: originalSavedPath) == preservedProfile)
+        #expect(try await originalStore.loadRegistry().activeAccountID == fixture.original.id)
+
+        try await fixture.service.switchAccount(to: fixture.original.id)
+        #expect(try Data(contentsOf: fixture.active.appending(path: "auth.json"))
+                == fixture.credential(fixture.original))
+        #expect(try Data(contentsOf: originalSavedPath) == preservedProfile)
+        #expect(try Data(contentsOf: originalAppData.appending(path: "accounts.json")) == preservedRegistry)
+    }
+
+    @Test func failedForkSwitchRestoresSharedLoginWithoutChangingOriginalAppFiles() async throws {
+        let fixture = try LocalSwitchFixture()
+        defer { fixture.remove() }
+        try await fixture.prepare()
+        let originalAppData = fixture.root.appending(path: "upstream-app-support")
+        let originalStore = AccountStore(baseURL: originalAppData, activeHomeURL: fixture.active)
+        try await originalStore.importCurrentProfile(fixture.original)
+        let preservedRegistry = try Data(contentsOf: originalAppData.appending(path: "accounts.json"))
+        let originalSaved = await originalStore.profileHome(id: fixture.original.id)
+            .appending(path: "auth.json")
+        let preservedProfile = try Data(contentsOf: originalSaved)
+
+        let targetHome = await fixture.store.profileHome(id: fixture.target.id)
+        let targetAuth = targetHome.appending(path: "auth.json")
+        let malformed = Data("invalid-test-credential".utf8)
+        try malformed.write(to: targetAuth)
+
+        do {
+            try await fixture.service.switchAccount(to: fixture.target.id)
+            Issue.record("The synthetic target identity should not pass verification")
+        } catch let error as OperationError {
+            #expect(error.stage == .verifyTargetIdentity)
+        }
+
+        #expect(try Data(contentsOf: fixture.active.appending(path: "auth.json"))
+                == fixture.credential(fixture.original))
+        #expect(try await fixture.store.loadRegistry().activeAccountID == fixture.original.id)
+        #expect(try Data(contentsOf: originalAppData.appending(path: "accounts.json")) == preservedRegistry)
+        #expect(try Data(contentsOf: originalSaved) == preservedProfile)
+        #expect(try Data(contentsOf: targetAuth) == malformed)
+    }
+
     @Test func missingCredentialFailsExplicitly() async throws {
         let fixture = try LocalSwitchFixture()
         defer { fixture.remove() }

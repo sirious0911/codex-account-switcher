@@ -45,7 +45,75 @@ internal static class DesktopCloseChecks
             Require(FindFixture(newExecutable) is null, "The refreshed package path should close the updated fixture.");
             Require(discoveryCount == 4, "Each open and close operation should discover the current package path.");
 
-            Console.WriteLine("PASS: a versioned Store-path update is discovered for each open and close; normal window close exits the matching process.");
+            // A packaged Electron app can hide on X. The switcher must refuse
+            // the handoff before hiding the visible window if no real Quit
+            // menu can be invoked. The process remains alive and accessible.
+            using (var noMenu = LaunchFixture(oldExecutable, "no-menu"))
+            {
+                await WaitForWindowAsync(oldExecutable);
+                var packaged = new DesktopController(_ =>
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")),
+                    TimeSpan.FromSeconds(2));
+                var denied = false;
+                try { await packaged.CloseAsync(CancellationToken.None); }
+                catch (IOException ex) {
+                    denied = ex.Message.Contains("Ctrl+Q", StringComparison.Ordinal) &&
+                        ex.Message.Contains("account was not changed", StringComparison.Ordinal);
+                }
+                catch (TimeoutException ex) {
+                    denied = ex.Message.Contains("account was not changed", StringComparison.Ordinal);
+                }
+                Require(denied, "Packaged app without a functional Quit must fail closed.");
+                noMenu.Refresh();
+                Require(!noMenu.HasExited && noMenu.MainWindowHandle != IntPtr.Zero,
+                    "Fail-closed packaged shutdown must not hide or terminate the visible desktop.");
+            }
+            StopFixture(oldExecutable);
+
+            // A packaged fixture exposing an explicit File -> Quit ChatGPT
+            // menu must be requested through that exact menu, not WM_CLOSE.
+            using (var menu = LaunchFixture(oldExecutable, "menu"))
+            {
+                await WaitForWindowAsync(oldExecutable);
+                var packaged = new DesktopController(_ =>
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")));
+                await packaged.CloseAsync(CancellationToken.None);
+                Require(FindFixture(oldExecutable) is null,
+                    "Packaged desktop must exit cleanly through File -> Quit ChatGPT.");
+            }
+
+            // Official Windows desktop shortcut Ctrl+Q is the fallback when
+            // the app's Electron File menu is absent from accessibility.
+            // This fixture is strictly local: never the user's Codex process.
+            using (var shortcut = LaunchFixture(oldExecutable, "shortcut"))
+            {
+                await WaitForWindowAsync(oldExecutable);
+                var packaged = new DesktopController(_ =>
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")),
+                    TimeSpan.FromSeconds(5));
+                var focusDenied = false;
+                try { await packaged.CloseAsync(CancellationToken.None); }
+                catch (IOException ex) when (ex.Message.Contains(
+                    "Quit command could not be sent safely", StringComparison.Ordinal))
+                {
+                    // CI runners can refuse SetForegroundWindow to a
+                    // noninteractive child process. This is a GOOD fail-closed
+                    // result, but is not an automatic-Quit success claim.
+                    focusDenied = true;
+                }
+                if (focusDenied)
+                {
+                    shortcut.Refresh();
+                    Require(!shortcut.HasExited && shortcut.MainWindowHandle != IntPtr.Zero,
+                        "When Windows denies focus, no input or close must affect the fixture.");
+                    Console.WriteLine("SKIP: Ctrl+Q automatic exit unavailable because Windows denied foreground focus.");
+                }
+                else
+                    Require(FindFixture(oldExecutable) is null,
+                        "The documented Ctrl+Q shortcut must exit the isolated fixture.");
+            }
+
+            Console.WriteLine("PASS: Store path discovery, File Quit, focus-gated Ctrl+Q, and fail-closed handoff.");
             return 0;
         }
         catch (Exception ex)
@@ -61,6 +129,16 @@ internal static class DesktopCloseChecks
         }
     }
 
+    private static Process LaunchFixture(string executable, string mode)
+    {
+        var start = new ProcessStartInfo(executable) {
+            UseShellExecute = false,
+            WorkingDirectory = Path.GetDirectoryName(executable)!
+        };
+        start.Environment["CODEX_CLOSE_FIXTURE_MODE"] = mode;
+        return Process.Start(start) ?? throw new IOException("Could not start isolated desktop fixture.");
+    }
+
     private static void CopyFixture(string executable, string destination)
     {
         foreach (var file in Directory.EnumerateFiles(Path.GetDirectoryName(Path.GetFullPath(executable))!))
@@ -69,6 +147,16 @@ internal static class DesktopCloseChecks
 
     private static async Task VerifyRunningPackageIdentityAsync()
     {
+        // GitHub-hosted Windows runners have no user-installed OpenAI.Codex
+        // package, and Get-AppxPackage can hang beyond the discovery timeout.
+        // The owned two-version fixture below still exercises path/AUMID
+        // matching, normal Quit, and fail-closed behaviour independently.
+        if (string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"),
+                "true", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("SKIP: live Store package identity unavailable on GitHub-hosted runner; owned fixture cases remain enabled.");
+            return;
+        }
         DesktopInstallation installation;
         try { installation = await DesktopController.DiscoverAsync(null); }
         catch (FileNotFoundException) { return; }

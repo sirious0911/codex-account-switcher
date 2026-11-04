@@ -7,7 +7,7 @@ import path from "node:path";
 import test from "node:test";
 import { assets, compareVersions, downloadVerified, installMac, installTarget, installWindows, latestRelease, macLegacyAppsToRemove, releaseChecksum, removeMacLegacyApps } from "../../npm/lib/install.mjs";
 
-const repository = "https://github.com/liuzhao1225/codex-account-switcher";
+const repository = "https://github.com/sirious0911/codex-account-switcher";
 const asset = assets.windows;
 const digest = (value) => createHash("sha256").update(value).digest("hex");
 const fixture = (version) => ({ ok: true, url: `${repository}/releases/tag/v${version}` });
@@ -58,8 +58,8 @@ test("checksums and downloads use the same resolved version and reject corruptio
 
 test("targets are user-level and unsupported platforms fail before downloading", async () => {
   const home = path.resolve("test-home");
-  assert.equal((await installTarget({ platform: "darwin", arch: "arm64", release: "23.0.0", home })).target, path.join(home, "Applications", "Codex Account Switcher.app"));
-  assert.equal((await installTarget({ platform: "win32", arch: "x64", release: "10.0.0", localAppData: home })).target, path.join(home, "Programs", "Codex Account Switcher", "Codex Account Switcher.exe"));
+  assert.equal((await installTarget({ platform: "darwin", arch: "arm64", release: "23.0.0", home })).target, path.join(home, "Applications", "Codex Account Switcher Personal.app"));
+  assert.equal((await installTarget({ platform: "win32", arch: "x64", release: "10.0.0", localAppData: home })).target, path.join(home, "Programs", "Codex Account Switcher Personal", "Codex Account Switcher Personal.exe"));
   for (const params of [{ platform: "linux", arch: "x64" }, { platform: "darwin", arch: "x64" }, { platform: "darwin", arch: "arm64", release: "22.0.0" }]) {
     await assert.rejects(installTarget(params), /Unsupported system/);
   }
@@ -71,7 +71,7 @@ test("targets are user-level and unsupported platforms fail before downloading",
 test("Windows deployment replaces the EXE and leaves neighboring files intact", async (t) => {
   const dir = await temporary(t);
   const source = path.join(dir, "download.exe");
-  const target = path.join(dir, "application", "Codex Account Switcher.exe");
+  const target = path.join(dir, "application", "Codex Account Switcher Personal.exe");
   await writeFile(source, "v1");
   await installWindows(source, target);
   await writeFile(path.join(path.dirname(target), "keep.txt"), "user data");
@@ -83,14 +83,14 @@ test("Windows deployment replaces the EXE and leaves neighboring files intact", 
 
 test("macOS deployment removes obsolete app files, preserves neighbors, and blocks a running app", async (t) => {
   const dir = await temporary(t);
-  const target = path.join(dir, "Applications", "Codex Account Switcher.app");
+  const target = path.join(dir, "Applications", "Codex Account Switcher Personal.app");
   await mkdir(target, { recursive: true });
   await writeFile(path.join(target, "old-resource"), "old");
   await writeFile(path.join(path.dirname(target), "keep.txt"), "user data");
   let running = true;
   let detachCount = 0;
   const fakeRun = (command, args) => {
-    if (command.endsWith("plutil")) return args[1] === "CFBundleIdentifier" ? "com.liuzhao.codex-account-switcher" : "0.1.16";
+    if (command.endsWith("plutil")) return args[1] === "CFBundleIdentifier" ? "com.sirious0911.codex-account-switcher" : "0.1.16";
     if (command.endsWith("ditto")) cpSync(args[0], args[1], { recursive: true });
     if (command.endsWith("ps")) return running ? `${target}/Contents/MacOS/CodexAccountSwitcher` : "";
     if (command.endsWith("hdiutil") && args[0] === "detach") detachCount++;
@@ -98,7 +98,7 @@ test("macOS deployment removes obsolete app files, preserves neighbors, and bloc
   };
   for (let pass = 0; pass < 2; pass++) {
     const temp = path.join(dir, `download-${pass}`);
-    const source = path.join(temp, "mounted", "Codex Account Switcher.app");
+    const source = path.join(temp, "mounted", "Codex Account Switcher Personal.app");
     await mkdir(temp);
     const run = (command, args) => {
       if (command.endsWith("hdiutil") && args[0] === "attach") {
@@ -123,7 +123,7 @@ test("macOS deployment removes obsolete app files, preserves neighbors, and bloc
 
 test("macOS legacy cleanup removes only recognized, stopped app bundles", async (t) => {
   const dir = await temporary(t);
-  const oldApp = path.join(dir, "Applications", "Codex Account Switcher.app");
+  const oldApp = path.join(dir, "Applications", "Codex Account Switcher Personal.app");
   const unrelatedApp = path.join(dir, "Applications", "Other Switcher.app");
   await mkdir(path.join(oldApp, "Contents"), { recursive: true });
   await mkdir(path.join(unrelatedApp, "Contents"), { recursive: true });
@@ -131,7 +131,7 @@ test("macOS legacy cleanup removes only recognized, stopped app bundles", async 
     if (command.endsWith("plutil")) {
       const recognized = args.at(-1).startsWith(oldApp);
       return args[1] === "CFBundleIdentifier"
-        ? (recognized ? "com.liuzhao.codex-account-switcher" : "com.example.other")
+        ? (recognized ? "com.sirious0911.codex-account-switcher" : "com.example.other")
         : "0.1.14";
     }
     if (command.endsWith("ps")) return "";
@@ -150,7 +150,7 @@ test("macOS cleanup preserves the selected app through a symlinked installation 
   const home = await temporary(t);
   const applications = path.join(home, "Applications");
   const alias = path.join(home, "apps-alias");
-  const app = path.join(applications, "Codex Account Switcher.app");
+  const app = path.join(applications, "Codex Account Switcher Personal.app");
   await mkdir(path.join(app, "Contents"), { recursive: true });
   await symlink(applications, alias, process.platform === "win32" ? "junction" : "dir");
   const { target, legacyTargets } = await installTarget({ platform: "darwin", arch: "arm64", release: "23.0.0", home, directory: alias });
@@ -164,9 +164,9 @@ test("macOS cleanup preserves the selected app through a symlinked installation 
 
 test("macOS cleanup preserves case aliases of the selected app", { skip: process.platform !== "darwin" }, async (t) => {
   const home = await temporary(t);
-  const app = path.join(home, "Applications", "Codex Account Switcher.app");
+  const app = path.join(home, "Applications", "Codex Account Switcher Personal.app");
   await mkdir(path.join(app, "Contents"), { recursive: true });
-  const selectedTarget = path.join(home, "applications", "Codex Account Switcher.app");
+  const selectedTarget = path.join(home, "applications", "Codex Account Switcher Personal.app");
   let alias;
   try { alias = await stat(selectedTarget); }
   catch (error) {
@@ -183,13 +183,13 @@ test("macOS cleanup removes aliased legacy candidates only once", async (t) => {
   const home = await temporary(t);
   const applications = path.join(home, "SharedApplications");
   const alias = path.join(home, "Applications");
-  const oldApp = path.join(applications, "Codex Account Switcher.app");
+  const oldApp = path.join(applications, "Codex Account Switcher Personal.app");
   await mkdir(path.join(oldApp, "Contents"), { recursive: true });
   await symlink(applications, alias, process.platform === "win32" ? "junction" : "dir");
-  const legacyAlias = path.join(alias, "Codex Account Switcher.app");
+  const legacyAlias = path.join(alias, "Codex Account Switcher Personal.app");
   const unregistered = [];
   const run = (command, args) => {
-    if (command.endsWith("plutil")) return args[1] === "CFBundleIdentifier" ? "com.liuzhao.codex-account-switcher" : "0.1.16";
+    if (command.endsWith("plutil")) return args[1] === "CFBundleIdentifier" ? "com.sirious0911.codex-account-switcher" : "0.1.16";
     if (command.endsWith("lsregister")) unregistered.push(args.at(-1));
     return "";
   };
@@ -203,12 +203,12 @@ test("macOS cleanup protects a running app launched through a directory alias", 
   const home = await temporary(t);
   const applications = path.join(home, "Applications");
   const alias = path.join(home, "apps-alias");
-  const oldApp = path.join(applications, "Codex Account Switcher.app");
+  const oldApp = path.join(applications, "Codex Account Switcher Personal.app");
   await mkdir(path.join(oldApp, "Contents"), { recursive: true });
   await symlink(applications, alias, process.platform === "win32" ? "junction" : "dir");
   const run = (command, args) => {
-    if (command.endsWith("plutil")) return args[1] === "CFBundleIdentifier" ? "com.liuzhao.codex-account-switcher" : "0.1.16";
-    if (command.endsWith("ps")) return `${path.join(alias, "Codex Account Switcher.app")}/Contents/MacOS/CodexAccountSwitcher`;
+    if (command.endsWith("plutil")) return args[1] === "CFBundleIdentifier" ? "com.sirious0911.codex-account-switcher" : "0.1.16";
+    if (command.endsWith("ps")) return `${path.join(alias, "Codex Account Switcher Personal.app")}/Contents/MacOS/CodexAccountSwitcher`;
     assert.fail("A running app must not be unregistered");
   };
   await assert.rejects(removeMacLegacyApps({ targets: [oldApp], selectedTarget: path.join(home, "Selected.app"), version: "0.2.0" }, run), /Quit Codex/);
@@ -224,7 +224,7 @@ for (const scenario of ["newer", "running"]) {
     for (const app of [oldApp, protectedApp, selectedTarget]) await mkdir(app);
     const run = (command, args) => {
       if (command.endsWith("plutil")) {
-        if (args[1] === "CFBundleIdentifier") return "com.liuzhao.codex-account-switcher";
+        if (args[1] === "CFBundleIdentifier") return "com.sirious0911.codex-account-switcher";
         return scenario === "newer" && args.at(-1).startsWith(protectedApp) ? "0.3.0" : "0.1.16";
       }
       if (command.endsWith("ps")) return scenario === "running" ? `${protectedApp}/Contents/MacOS/CodexAccountSwitcher` : "";

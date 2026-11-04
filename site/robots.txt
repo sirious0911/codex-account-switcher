@@ -4,4 +4,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://liuzhao1225.github.io/codex-account-switcher/sitemap.xml
+Sitemap: https://sirious0911.github.io/codex-account-switcher/sitemap.xml

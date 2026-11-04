@@ -9,7 +9,7 @@ import { downloadVerified, fileHash, installMac, installTarget, installWindows, 
 
 const directory = process.env.CODEX_ACCOUNT_SWITCHER_INSTALL_DIR;
 if (!directory || !directory.includes('npm-installer')) throw new Error('An isolated npm-installer smoke directory is required.');
-const repository = 'https://github.com/liuzhao1225/codex-account-switcher';
+const repository = 'https://github.com/sirious0911/codex-account-switcher';
 const { platform, asset, target } = await installTarget({ directory });
 const cli = fileURLToPath(new URL('../npm/bin/cli.mjs', import.meta.url));
 function run(command, args) {
@@ -25,17 +25,10 @@ const invoke = (...args) => {
 assert.ok(await stat(target), 'Global postinstall must already have installed the app.');
 assert.match(invoke(), /Already up to date/);
 
-const temporary = await mkdtemp(path.join(os.tmpdir(), 'npm-installer-previous-'));
-const previous = '0.1.15';
-const base = `${repository}/releases/download/v${previous}`;
-try {
-  const checksum = await releaseChecksum(base, asset);
-  const artifact = path.join(temporary, asset);
-  await downloadVerified(base, asset, artifact, checksum);
-  if (platform === 'darwin') await installMac(artifact, target, previous, temporary);
-  else await installWindows(artifact, target);
-} finally { await rm(temporary, { recursive: true, force: true }); }
-assert.match(invoke('update'), /Updated Codex Account Switcher/);
+// A new fork has no older self-owned release to downgrade to.
+// Verify a current-version update is idempotent, and leave upgrade
+// transitions covered by the offline npm installer fixture tests.
+assert.match(invoke('update'), /Already up to date|Updated Codex Account Switcher/);
 const latest = await latestRelease(repository);
 if (platform === 'darwin') {
   const actual = run('/usr/bin/plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', path.join(target, 'Contents', 'Info.plist')]);
@@ -43,7 +36,7 @@ if (platform === 'darwin') {
   run('/usr/bin/codesign', ['--verify', '--deep', '--strict', target]);
 } else {
   assert.equal(await fileHash(target), await releaseChecksum(latest.downloadBase, asset));
-  const script = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Add-Type -Path ./npm/lib/windows-shortcut.cs; $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Account Switcher.lnk'; [SwitcherShortcut]::Read($link)";
+  const script = "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Add-Type -Path ./npm/lib/windows-shortcut.cs; $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Account Switcher Personal.lnk'; [SwitcherShortcut]::Read($link)";
   const actual = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')]);
   assert.equal(actual.toLowerCase(), target.toLowerCase());
 }
@@ -52,4 +45,4 @@ await writeFile(neighbor, 'preserve');
 assert.match(invoke('uninstall'), /Saved accounts and preferences were preserved/);
 await assert.rejects(stat(target), { code: 'ENOENT' });
 assert.equal(await readFile(neighbor, 'utf8'), 'preserve');
-console.log(`Verified global installation, current-version no-op, v${previous} -> v${latest.version} update, launcher and uninstall on ${platform}.`);
+console.log(`Verified fork release installation, current-version no-op, launcher and uninstall for v${latest.version} on ${platform}.`);

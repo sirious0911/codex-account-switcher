@@ -79,7 +79,7 @@ struct CredentialSyncTests {
     @Test func tokenWorkspaceIDTakesPrecedenceOverDefaultClaim() throws {
         let claims = Data(#"{"email":"same@example.test","https://api.openai.com/auth":{"chatgpt_account_id":"personal"}}"#.utf8)
             .base64EncodedString()
-        let data = try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": "workspace", "id_token": [REDACTED_SECRET]]])
+        let data = try JSONSerialization.data(withJSONObject: ["tokens": ["account_id": "workspace", "id_token": "e30." + claims + ".signature"]])
         #expect(try CredentialIdentity.decode(data)?.accountID == "workspace")
         #expect(try CredentialIdentity.decode(data)?.email == "same@example.test")
     }

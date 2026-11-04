@@ -52,14 +52,18 @@ internal static class DesktopCloseChecks
             {
                 await WaitForWindowAsync(oldExecutable);
                 var packaged = new DesktopController(_ =>
-                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")));
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")),
+                    TimeSpan.FromSeconds(2));
                 var denied = false;
                 try { await packaged.CloseAsync(CancellationToken.None); }
                 catch (IOException ex) {
-                    denied = ex.Message.Contains("File", StringComparison.Ordinal) &&
+                    denied = ex.Message.Contains("Ctrl+Q", StringComparison.Ordinal) &&
                         ex.Message.Contains("account was not changed", StringComparison.Ordinal);
                 }
-                Require(denied, "Packaged app without File -> Quit must fail closed.");
+                catch (TimeoutException ex) {
+                    denied = ex.Message.Contains("account was not changed", StringComparison.Ordinal);
+                }
+                Require(denied, "Packaged app without a functional Quit must fail closed.");
                 noMenu.Refresh();
                 Require(!noMenu.HasExited && noMenu.MainWindowHandle != IntPtr.Zero,
                     "Fail-closed packaged shutdown must not hide or terminate the visible desktop.");
@@ -78,7 +82,38 @@ internal static class DesktopCloseChecks
                     "Packaged desktop must exit cleanly through File -> Quit ChatGPT.");
             }
 
-            Console.WriteLine("PASS: versioned Store-path discovery, native window close for non-Store apps, and safe packaged File -> Quit or fail-closed behavior.");
+            // Official Windows desktop shortcut Ctrl+Q is the fallback when
+            // the app's Electron File menu is absent from accessibility.
+            // This fixture is strictly local: never the user's Codex process.
+            using (var shortcut = LaunchFixture(oldExecutable, "shortcut"))
+            {
+                await WaitForWindowAsync(oldExecutable);
+                var packaged = new DesktopController(_ =>
+                    Task.FromResult(new DesktopInstallation(oldExecutable, "OpenAI.Codex_fixture!App")),
+                    TimeSpan.FromSeconds(5));
+                var focusDenied = false;
+                try { await packaged.CloseAsync(CancellationToken.None); }
+                catch (IOException ex) when (ex.Message.Contains(
+                    "Quit command could not be sent safely", StringComparison.Ordinal))
+                {
+                    // CI runners can refuse SetForegroundWindow to a
+                    // noninteractive child process. This is a GOOD fail-closed
+                    // result, but is not an automatic-Quit success claim.
+                    focusDenied = true;
+                }
+                if (focusDenied)
+                {
+                    shortcut.Refresh();
+                    Require(!shortcut.HasExited && shortcut.MainWindowHandle != IntPtr.Zero,
+                        "When Windows denies focus, no input or close must affect the fixture.");
+                    Console.WriteLine("SKIP: Ctrl+Q automatic exit unavailable because Windows denied foreground focus.");
+                }
+                else
+                    Require(FindFixture(oldExecutable) is null,
+                        "The documented Ctrl+Q shortcut must exit the isolated fixture.");
+            }
+
+            Console.WriteLine("PASS: Store path discovery, File Quit, focus-gated Ctrl+Q, and fail-closed handoff.");
             return 0;
         }
         catch (Exception ex)

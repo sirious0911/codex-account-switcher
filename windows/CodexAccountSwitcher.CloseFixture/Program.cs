@@ -20,9 +20,23 @@ internal static class Program
         // Isolated replica of the Store app's X = hide behavior.
         // Only the File -> Quit ChatGPT menu exits when enabled.
         var mode = Environment.GetEnvironmentVariable("CODEX_CLOSE_FIXTURE_MODE");
-        if (mode is "menu" or "no-menu")
+        if (mode is "menu" or "no-menu" or "shortcut")
         {
             var quitInvoked = false;
+            if (mode == "shortcut")
+            {
+                // Isolated test of the app's documented Ctrl+Q accelerator.
+                form.KeyPreview = true;
+                form.KeyDown += (_, e) => {
+                    if (e.Control && e.KeyCode == Keys.Q)
+                    {
+                        e.Handled = true;
+                        e.SuppressKeyPress = true;
+                        quitInvoked = true;
+                        form.Close();
+                    }
+                };
+            }
             form.FormClosing += (_, e) =>
             {
                 if (!quitInvoked)

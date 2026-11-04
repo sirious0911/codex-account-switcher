@@ -7,8 +7,10 @@ namespace CodexAccountSwitcher.Core;
 
 public sealed record DesktopInstallation(string Executable, string? AppUserModelId = null);
 
-public sealed class DesktopController(Func<CancellationToken, Task<DesktopInstallation>> discover)
+public sealed class DesktopController(Func<CancellationToken, Task<DesktopInstallation>> discover,
+    TimeSpan? gracefulExitTimeout = null)
 {
+    private readonly TimeSpan waitForQuit = gracefulExitTimeout ?? TimeSpan.FromSeconds(30);
     private const int ErrorInsufficientBuffer = 122;
     private const int ErrorSuccess = 0;
 
@@ -116,14 +118,19 @@ public sealed class DesktopController(Func<CancellationToken, Task<DesktopInstal
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     if (process.HasExited || process.MainWindowHandle == IntPtr.Zero) continue;
-                    if (DesktopQuitMenu.TryInvoke(process))
+                    // Windows' documented Ctrl+Q app Quit command is the
+                    // fallback when the Electron menu is absent from UIA.
+                    // The shortcut may be sent only after target HWND+PID
+                    // foreground verification; no generic SendKeys or Kill.
+                    if (DesktopQuitMenu.TryInvoke(process) ||
+                        DesktopQuitShortcut.TryInvoke(process))
                     {
                         requested = true;
                         break;
                     }
                 }
                 if (!requested)
-                    throw new IOException("Codex Desktop is still open. Use File → Quit ChatGPT from the Codex Desktop menu, wait until its background processes exit, then retry account switching. The account was not changed.");
+                    throw new IOException("Codex Desktop is still open. The app's Quit command could not be sent safely. Finish Desktop tasks, focus Codex, press Ctrl+Q (or File → Quit ChatGPT), wait for background processes to exit, then retry account switching. The account was not changed.");
             }
             else
             {
@@ -148,8 +155,8 @@ public sealed class DesktopController(Func<CancellationToken, Task<DesktopInstal
                 var count = remaining.Count;
                 foreach (var process in remaining) process.Dispose();
                 if (count == 0) return;
-                if (stopwatch.Elapsed > TimeSpan.FromSeconds(30))
-                    throw new TimeoutException("Codex Desktop did not exit within 30 seconds. Finish its tasks and quit it manually; the account was not changed.");
+                if (stopwatch.Elapsed > waitForQuit)
+                    throw new TimeoutException("Codex Desktop did not exit after its normal Quit request. Finish any Desktop tasks, press Ctrl+Q manually, and retry. The account was not changed.");
                 await Task.Delay(200, cancellationToken);
             }
         }

@@ -147,6 +147,16 @@ internal static class DesktopCloseChecks
 
     private static async Task VerifyRunningPackageIdentityAsync()
     {
+        // GitHub-hosted Windows runners have no user-installed OpenAI.Codex
+        // package, and Get-AppxPackage can hang beyond the discovery timeout.
+        // The owned two-version fixture below still exercises path/AUMID
+        // matching, normal Quit, and fail-closed behaviour independently.
+        if (string.Equals(Environment.GetEnvironmentVariable("GITHUB_ACTIONS"),
+                "true", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("SKIP: live Store package identity unavailable on GitHub-hosted runner; owned fixture cases remain enabled.");
+            return;
+        }
         DesktopInstallation installation;
         try { installation = await DesktopController.DiscoverAsync(null); }
         catch (FileNotFoundException) { return; }

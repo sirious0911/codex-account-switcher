@@ -51,6 +51,47 @@ internal static class Program
                 TaskbarQuotaPanel.PreferredHeight == 48 &&
                 TaskbarQuotaPanel.IndicatorHeight == 30,
                 "The hosted HWND must span the taskbar row while the smaller quota strip stays vertically centered, immediately LEFT of ^.");
+            Assert(appFields.Any(f => f.FieldType == typeof(AdaptiveUsageRefreshService)),
+                "Adaptive work polling must be owned by the same Windows app, not a second process.");
+            // Metadata-only recent-session detection: never inspect login or transcript bytes.
+            var syntheticHome = Path.Combine(output, "adaptive-work-fixture");
+            var exampleDay = DateTimeOffset.UtcNow;
+            var dayFolder = Path.Combine(syntheticHome, "sessions",
+                exampleDay.Year.ToString("0000"), exampleDay.Month.ToString("00"),
+                exampleDay.Day.ToString("00"));
+            Directory.CreateDirectory(dayFolder);
+            var rollout = Path.Combine(dayFolder, "rollout-synthetic.jsonl");
+            var unrelated = Path.Combine(dayFolder, "unrelated.txt");
+            File.WriteAllText(rollout, "content-is-not-used-in-activity-detection");
+            File.WriteAllText(unrelated, "test");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddSeconds(-40));
+            Assert(CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Recent Codex rollout metadata should count as possible work.");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddMinutes(-4));
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Old rollout activity should not hold one-minute polling forever.");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddMinutes(2));
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Future timestamps must not falsely trigger active polling.");
+            File.Delete(rollout);
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Non-rollout file changes are not Codex task evidence.");
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(
+                Path.Combine(output, "missing-user-codex-home"), exampleDay),
+                "Missing session files fail idle without blocking the app.");
+            Assert(CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "ChatGPT", @"C:\Program Files\WindowsApps\OpenAI.Codex_0.1_x64__fixture\ChatGPT.exe"),
+                "Official Windows Codex Desktop can use ChatGPT.exe as its manifest binary.");
+            Assert(CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "Codex", @"C:\Program Files\WindowsApps\OpenAI.Codex_0.1_x64__fixture\Codex.exe"),
+                "Official Codex executable is also accepted when package path matches.");
+            Assert(!CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "ChatGPT", @"C:\Program Files\ChatGPT\ChatGPT.exe"),
+                "Unrelated ChatGPT application must not count as active Codex work.");
+            Assert(!CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "Codex", @"C:\Tools\unrelated\Codex.exe"),
+                "A process name alone never authorizes higher-frequency API polling.");
+
             using (var taskbar = new TaskbarQuotaPanel(() => {}, () => {}, () => true))
             {
                 Assert(taskbar.CurrentReadout.FiveHourRemaining == null &&

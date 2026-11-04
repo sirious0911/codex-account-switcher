@@ -25,6 +25,7 @@ public partial class App : Application
     private EventWaitHandle? activateWindow;
     private RegisteredWaitHandle? activationListener;
     private TaskbarQuotaPanel? taskbarPanel;
+    private AdaptiveUsageRefreshService? adaptiveUsage;
     private CoreClient? client;
     private LocalMonitorWorker? monitorWorker;
     // Only the confirmed active profile feeds a WPF child HWND embedded
@@ -60,10 +61,12 @@ public partial class App : Application
                 () => { ApplyTheme(); window.OpenWindow(); },
                 () => _ = QuitAsync(),
                 () => !window.IsBusy);
+            adaptiveUsage = new AdaptiveUsageRefreshService(client);
             SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
             client.Changed += OnClientChanged;
             await client.InitializeAsync();
             taskbarPanel?.Start();
+            adaptiveUsage?.Start();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
@@ -86,10 +89,15 @@ public partial class App : Application
         // The local worker receives all profiles. Only confirmed active-profile
         // observations may update the taskbar child panel.
         if (!externalMonitorGate.Allows(sample)) return;
-        if (Dispatcher.CheckAccess()) taskbarPanel?.Accept(sample);
+        if (Dispatcher.CheckAccess()) {
+            if (sample.ProfileID is Guid id) adaptiveUsage?.ObserveFreshActiveSample(id);
+            taskbarPanel?.Accept(sample);
+        }
         else Dispatcher.BeginInvoke(new Action(() => {
             // Source selection must be rechecked after deferred UI dispatch.
-            if (externalMonitorGate.Allows(sample)) taskbarPanel?.Accept(sample);
+            if (!externalMonitorGate.Allows(sample)) return;
+            if (sample.ProfileID is Guid id) adaptiveUsage?.ObserveFreshActiveSample(id);
+            taskbarPanel?.Accept(sample);
         }));
     }
 
@@ -128,6 +136,7 @@ public partial class App : Application
     private async Task QuitAsync() {
         if (exiting || window?.IsBusy == true) return;
         exiting = true; updates?.Stop();
+        adaptiveUsage?.Dispose();
         activationListener?.Unregister(null);
         if (client != null) {
             client.MonitorObserved -= OnMonitorObserved;
@@ -172,6 +181,7 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e) {
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         taskbarPanel?.Dispose();
+        adaptiveUsage?.Dispose();
         activateWindow?.Dispose();
         if (ownsMutex) instance?.ReleaseMutex(); instance?.Dispose();
         base.OnExit(e);

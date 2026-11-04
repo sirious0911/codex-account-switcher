@@ -67,6 +67,69 @@ var live = new AccountSnapshot(
         new(new(otherID, "Studio", null), "S", null, "refresh unavailable", "error")
     ],
     accountID, new(), false, false, true, null, new Dictionary<string, string>());
+// Adaptive polling adds only one-minute reads with *recent work evidence*;
+// the Swift five-minute baseline remains the only idle poller.
+var pollTime = DateTimeOffset.FromUnixTimeSeconds(1_900_000_000);
+var adaptive = new AdaptiveUsageRefreshPolicy(pollTime);
+// The initially selected account is observed at startup before activity begins.
+_ = adaptive.TrySchedule(pollTime, false, live);
+Check("adaptive minimum interval is one minute",
+    AdaptiveUsageRefreshPolicy.IntervalForMisses(0) == TimeSpan.FromMinutes(1));
+Check("adaptive backoff is two then four then five minutes",
+    AdaptiveUsageRefreshPolicy.IntervalForMisses(1) == TimeSpan.FromMinutes(2) &&
+    AdaptiveUsageRefreshPolicy.IntervalForMisses(2) == TimeSpan.FromMinutes(4) &&
+    AdaptiveUsageRefreshPolicy.IntervalForMisses(3) == TimeSpan.FromMinutes(5) &&
+    AdaptiveUsageRefreshPolicy.IntervalForMisses(20) == TimeSpan.FromMinutes(5));
+Check("no active work means no extra API fetch",
+    !adaptive.TrySchedule(pollTime.AddMinutes(2), false, live));
+Check("first work detection triggers a read when initial cooldown has elapsed",
+    adaptive.TrySchedule(pollTime.AddMinutes(2), true, live));
+Check("duplicate tick never schedules overlapping fetch",
+    !adaptive.TrySchedule(pollTime.AddMinutes(2).AddSeconds(2), true, live));
+Check("waiting for async result blocks duplicate requests",
+    !adaptive.TrySchedule(pollTime.AddMinutes(2).AddSeconds(30), true, live));
+Check("lack of fresh observation activates conservative two-minute backoff",
+    !adaptive.TrySchedule(pollTime.AddMinutes(2).AddSeconds(41), true, live) &&
+    adaptive.ConsecutiveMisses == 1);
+Check("first retry is not allowed before two minutes",
+    !adaptive.TrySchedule(pollTime.AddMinutes(3).AddSeconds(59), true, live));
+Check("first retry after two minutes is allowed",
+    adaptive.TrySchedule(pollTime.AddMinutes(4), true, live));
+adaptive.Observed(otherID, pollTime.AddMinutes(4).AddSeconds(2));
+Check("background profile cannot acknowledge active profile request",
+    !adaptive.TrySchedule(pollTime.AddMinutes(4).AddSeconds(5), true, live));
+adaptive.Observed(accountID, pollTime.AddMinutes(4).AddSeconds(10));
+Check("fresh active response clears retry backoff",
+    adaptive.ConsecutiveMisses == 0);
+Check("fresh response enforces one-minute cooldown",
+    !adaptive.TrySchedule(pollTime.AddMinutes(5).AddSeconds(9), true, live) &&
+    adaptive.TrySchedule(pollTime.AddMinutes(5).AddSeconds(10), true, live));
+adaptive.RequestTransportFailed(pollTime.AddMinutes(5).AddSeconds(11));
+Check("transport failure backoff blocks immediate resends",
+    adaptive.ConsecutiveMisses == 1 &&
+    !adaptive.TrySchedule(pollTime.AddMinutes(6), true, live));
+Check("unconfirmed active identity cannot authorize a faster read",
+    !adaptive.TrySchedule(pollTime.AddMinutes(7), true,
+        live with { ActiveIdentityConfirmed = false }));
+Check("mutating active account cannot authorize a faster read",
+    !adaptive.TrySchedule(pollTime.AddMinutes(7).AddSeconds(1), true,
+        live with { IsMutating = true }));
+Check("host error cannot authorize a faster read",
+    !adaptive.TrySchedule(pollTime.AddMinutes(7).AddSeconds(2), true,
+        live with { Error = "Host unavailable" }));
+Check("switching to another active profile resets cooldown",
+    !adaptive.TrySchedule(pollTime.AddMinutes(7).AddSeconds(3), true,
+        live with { ActiveAccountID = otherID }));
+Check("previous-account response cannot trigger new-account refresh",
+    !adaptive.TrySchedule(pollTime.AddMinutes(7).AddSeconds(30), true,
+        live with { ActiveAccountID = otherID }));
+Check("new account permits a fresh request after one minute",
+    adaptive.TrySchedule(pollTime.AddMinutes(8).AddSeconds(3), true,
+        live with { ActiveAccountID = otherID }));
+Check("idle state never adds requests even after full backoff",
+    !adaptive.TrySchedule(pollTime.AddHours(1), false,
+        live with { ActiveAccountID = otherID }));
+
 var overview = MonitorOverview.From(live);
 Check("existing account snapshot produces two monitor rows", overview.Count == 2);
 Check("confirmed active account is identified without switching", overview[0].IsActive && !overview[1].IsActive);

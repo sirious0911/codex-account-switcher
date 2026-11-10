@@ -111,6 +111,42 @@ jobs:
           $process = [Diagnostics.Process]::Start($start)
           if (-not $process.WaitForExit(45000) -or $process.ExitCode -ne 0) { throw 'Self-contained package check failed.' }
           Get-Content windows/artifacts/package-self-test.txt
+      - name: Record isolated SwiftHost runtime provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archivePath = Join-Path $pwd 'windows/artifacts/SwiftRuntime.zip'
+          if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+            throw 'Freshly packaged SwiftRuntime.zip was not generated.'
+          }
+          Add-Type -AssemblyName System.IO.Compression
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+          try {
+            $hostEntries = @($archive.Entries | Where-Object { $_.FullName -ceq 'SwitcherHost.exe' })
+            if ($hostEntries.Count -ne 1) { throw 'Runtime must contain exactly one SwitcherHost.exe.' }
+            $stream = $hostEntries[0].Open()
+            try {
+              $hostSha = (Get-FileHash -InputStream $stream -Algorithm SHA256).Hash.ToLowerInvariant()
+            } finally { $stream.Dispose() }
+          } finally { $archive.Dispose() }
+          $archiveSha = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $artifactDir = Split-Path -Parent $archivePath
+          $encoding = [Text.UTF8Encoding]::new($false)
+          [IO.File]::WriteAllText((Join-Path $artifactDir 'SwiftRuntime.zip.sha256'),
+            "$archiveSha  SwiftRuntime.zip" + [Environment]::NewLine, $encoding)
+          [IO.File]::WriteAllText((Join-Path $artifactDir 'SwiftHost-source-commit.txt'),
+            "source_commit=$env:GITHUB_SHA" + [Environment]::NewLine +
+            "swifthost_sha256=$hostSha" + [Environment]::NewLine, $encoding)
+      - name: Upload isolated native SwiftHost runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: Codex-SwitcherHost-runtime-windows-x64
+          path: |
+            windows/artifacts/SwiftRuntime.zip
+            windows/artifacts/SwiftRuntime.zip.sha256
+            windows/artifacts/SwiftHost-source-commit.txt
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:

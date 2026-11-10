@@ -62,6 +62,21 @@ public enum CodexMonitorPayloadEncoder {
             credits = NSNull()
         }
 
+        // The rate-limits response may include expiry dates for individual
+        // available reset credits. Send ONLY the status and expiry, never
+        // provider credit IDs, to the local Windows taskbar readout.
+        var creditSummary: [String: Any] = ["availableCount": credits]
+        if let banked = usage.resetCredits {
+            let available = banked
+                .filter { $0.status == "available" && $0.resetType == "codexRateLimits" }
+                .sorted { ($0.expiresAt ?? .distantFuture) < ($1.expiresAt ?? .distantFuture) }
+            creditSummary["credits"] = Array(available.prefix(32)).map { credit in
+                ["status": "available",
+                 "expiresAt": credit.expiresAt.flatMap(epochSeconds)
+                    .map { $0 as Any } ?? NSNull()] as [String: Any]
+            }
+        }
+
         // These account details are provider IDs, not authentication materials.
         // Never log or transmit this payload without an independent privacy gate.
         let payload: [String: Any] = [
@@ -74,7 +89,7 @@ public enum CodexMonitorPayloadEncoder {
                     "secondary": weekly
                 ] as [String: Any]
             ],
-            "rateLimitResetCredits": ["availableCount": credits]
+            "rateLimitResetCredits": creditSummary
         ]
         guard JSONSerialization.isValidJSONObject(payload),
               let json = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])

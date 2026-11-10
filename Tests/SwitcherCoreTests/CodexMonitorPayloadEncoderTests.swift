@@ -58,6 +58,52 @@ final class CodexMonitorPayloadEncoderTests: XCTestCase {
         XCTAssertTrue(credits["availableCount"] is NSNull)
     }
 
+    func testAvailableCreditExpiriesReachLocalHoverWithoutCreditIDs() throws {
+        let credits: [BankedResetCredit] = [
+            BankedResetCredit(id: "private-available-one", status: "available",
+                resetType: "codexRateLimits", expiresAt: Date(timeIntervalSince1970: 1_800_200_000)),
+            BankedResetCredit(id: "private-spent", status: "used",
+                resetType: "codexRateLimits", expiresAt: Date(timeIntervalSince1970: 1_800_100_000)),
+            BankedResetCredit(id: "private-other-type", status: "available",
+                resetType: "otherResetType", expiresAt: Date(timeIntervalSince1970: 1_800_150_000)),
+            BankedResetCredit(id: "private-available-two", status: "available",
+                resetType: "codexRateLimits", expiresAt: Date(timeIntervalSince1970: 1_800_300_000))
+        ]
+        let withDates = WeeklyUsage(
+            remainingPercent: 60,
+            resetsAt: Date(timeIntervalSince1970: 1_800_600_000),
+            fiveHourRemainingPercent: 30,
+            fiveHourResetsAt: Date(timeIntervalSince1970: 1_800_030_000),
+            resetCreditsRemaining: 2,
+            resetCredits: credits
+        )
+        let result = try XCTUnwrap(CodexMonitorPayloadEncoder.encode(
+            profile: profile(), usage: withDates, planType: "plus",
+            ordinaryUsageAllowed: true, observedAt: observed))
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: result.jsonData) as? [String: Any])
+        let summary = try XCTUnwrap(obj["rateLimitResetCredits"] as? [String: Any])
+        XCTAssertEqual(summary["availableCount"] as? Int, 2)
+        let rows = try XCTUnwrap(summary["credits"] as? [[String: Any]])
+        XCTAssertEqual(rows.count, 2)
+        XCTAssertEqual(rows.map { $0["expiresAt"] as? Int }, [1_800_200_000, 1_800_300_000])
+        XCTAssertTrue(rows.allSatisfy { $0["status"] as? String == "available" && $0["id"] == nil })
+        let raw = try XCTUnwrap(String(data: result.jsonData, encoding: .utf8))
+        XCTAssertFalse(raw.contains("private-available-one"))
+        XCTAssertFalse(raw.contains("private-spent"))
+        XCTAssertFalse(raw.contains("private-other-type"))
+        XCTAssertFalse(raw.contains("private-available-two"))
+    }
+
+    func testMissingIndividualExpiryListDoesNotInventExpiryDates() throws {
+        let result = try XCTUnwrap(CodexMonitorPayloadEncoder.encode(
+            profile: profile(), usage: usage(), planType: "plus",
+            ordinaryUsageAllowed: true, observedAt: observed))
+        let obj = try XCTUnwrap(JSONSerialization.jsonObject(with: result.jsonData) as? [String: Any])
+        let summary = try XCTUnwrap(obj["rateLimitResetCredits"] as? [String: Any])
+        XCTAssertEqual(summary["availableCount"] as? Int, 2)
+        XCTAssertNil(summary["credits"])
+    }
+
     func testNoAccountIdIsRejected() {
         XCTAssertNil(CodexMonitorPayloadEncoder.encode(profile: profile(nil), usage: usage(), planType: "plus", ordinaryUsageAllowed: true, observedAt: observed))
     }

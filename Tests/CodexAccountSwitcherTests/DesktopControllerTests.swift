@@ -93,9 +93,20 @@ struct DesktopControllerTests {
         let personalCodex = try mockApp("Applications/Codex.app", identifier: "com.openai.codex")
         let personalChatGPT = try mockApp("Applications/ChatGPT.app", identifier: "com.openai.chatgpt")
         let fallbackURLs = desktop.fallbackApplicationURLs(homeDirectory: root)
-        #expect(fallbackURLs.contains(personalCodex))
-        #expect(fallbackURLs.contains(personalChatGPT))
+        // Foundation can preserve an .app bundle as a directory URL with a
+        // trailing slash; path identity must not depend on that URL hint.
+        func sameAppPath(_ lhs: URL?, _ rhs: URL) -> Bool {
+            guard let lhs else { return false }
+            let slashes = CharacterSet(charactersIn: "/")
+            return lhs.standardizedFileURL.path.trimmingCharacters(in: slashes)
+                == rhs.standardizedFileURL.path.trimmingCharacters(in: slashes)
+        }
+        #expect(fallbackURLs.contains { sameAppPath($0, personalCodex) })
+        #expect(fallbackURLs.contains { sameAppPath($0, personalChatGPT) })
         let personalCandidates = fallbackURLs.filter { $0.path.hasPrefix(root.path + "/") }
-        #expect(desktop.selectApplication(registeredURLs: [], fallbackURLs: personalCandidates) == personalCodex)
+        #expect(sameAppPath(
+            desktop.selectApplication(registeredURLs: [], fallbackURLs: personalCandidates),
+            personalCodex
+        ))
     }
 }

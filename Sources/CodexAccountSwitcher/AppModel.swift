@@ -36,6 +36,7 @@ final class AppModel: AccountController, @MainActor ObservableObject {
     @Published private(set) var launchAtLoginState: LaunchAtLoginState = .disabled
     @Published private(set) var monitorHistory: [MacMonitorLedger.HistoryEntry] = []
     private let quotaRelayPublisher = MacQuotaRelayPublisher()
+    let remoteQuotaViewer = MacRemoteQuotaViewerModel()
     private let monitorLedger = MacMonitorLedger(directory:
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Codex Account Switcher Personal/usage-monitor"))

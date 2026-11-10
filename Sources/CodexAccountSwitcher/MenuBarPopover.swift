@@ -174,6 +174,8 @@ struct MenuBarPopover: View {
                     Text(model.text("monitor_source_hint"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    MacRemoteQuotaPanel(viewer: model.remoteQuotaViewer)
+                    Divider()
                     if model.accounts.isEmpty {
                         Text(model.text("no_accounts"))
                             .foregroundStyle(.secondary)

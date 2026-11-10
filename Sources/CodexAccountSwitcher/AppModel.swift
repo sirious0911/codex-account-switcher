@@ -35,6 +35,7 @@ final class AppModel: AccountController, @MainActor ObservableObject {
     let objectWillChange = ObservableObjectPublisher()
     @Published private(set) var launchAtLoginState: LaunchAtLoginState = .disabled
     @Published private(set) var monitorHistory: [MacMonitorLedger.HistoryEntry] = []
+    private let quotaRelayPublisher = MacQuotaRelayPublisher()
     private let monitorLedger = MacMonitorLedger(directory:
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appending(path: "Codex Account Switcher Personal/usage-monitor"))
@@ -51,6 +52,16 @@ final class AppModel: AccountController, @MainActor ObservableObject {
             } catch {
                 // Monitoring is supplementary and must not interrupt account switching.
                 self.monitorHistory = self.monitorLedger.history()
+            }
+            // Only the freshly observed, verified active account may publish
+            // its non-secret 5H/7D view. Disabled unless a separate P3 HTTPS
+            // telemetry enrollment is explicitly configured in this process.
+            guard self.activeIdentityConfirmed,
+                  self.activeAccountID == observation.profileID else { return }
+            Task { @MainActor [weak self] in
+                guard let self, self.activeIdentityConfirmed,
+                      self.activeAccountID == observation.profileID else { return }
+                await self.quotaRelayPublisher.publish(observation)
             }
         }
         refreshLaunchAtLoginStatus()

@@ -73,14 +73,36 @@ struct DesktopController: DesktopControlling {
     }
 
     private func applicationURL() -> URL? {
-        for identifier in bundleIdentifiers {
-            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier) {
-                return url
-            }
+        let registeredURLs = bundleIdentifiers.compactMap { identifier in
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
         }
-        return applicationPaths
-            .map(URL.init(fileURLWithPath:))
-            .first(where: { FileManager.default.fileExists(atPath: $0.path) })
+        let fallbackURLs = fallbackApplicationURLs(homeDirectory: FileManager.default.homeDirectoryForCurrentUser)
+        return selectApplication(registeredURLs: registeredURLs, fallbackURLs: fallbackURLs)
+    }
+
+    // Launch Services may not know an app installed only for this user.
+    // Keep the existing system-wide fallback order and also search ~/Applications.
+    func fallbackApplicationURLs(homeDirectory: URL) -> [URL] {
+        applicationPaths.map(URL.init(fileURLWithPath:)) + [
+            homeDirectory.appendingPathComponent("Applications/Codex.app"),
+            homeDirectory.appendingPathComponent("Applications/ChatGPT.app"),
+        ]
+    }
+
+    // A filename or a stale Launch Services registration is not proof of
+    // identity. This separate selection path lets regression tests cover
+    // registry/fallback priority without launching any Desktop application.
+    func selectApplication(registeredURLs: [URL], fallbackURLs: [URL]) -> URL? {
+        (registeredURLs + fallbackURLs).first(where: isCodexApplication)
+    }
+
+    // Shared by workspace lookup, fallback selection, and isolated regression
+    // tests. Never reopen an unrelated app as a "successful" Codex restart.
+    func isCodexApplication(_ url: URL) -> Bool {
+        guard let actualIdentifier = Bundle(url: url)?.bundleIdentifier else {
+            return false
+        }
+        return bundleIdentifiers.contains(actualIdentifier)
     }
 
     private var isDesktopRunning: Bool {

@@ -1,6 +1,7 @@
 name: macOS personal-fork preview build
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [main]
     paths:
@@ -24,6 +25,11 @@ jobs:
     steps:
       - name: Check out pull request
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Run macOS Swift unit tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift test
       - name: Build ad-hoc-signed local macOS bundle
         shell: bash
         run: |
@@ -42,6 +48,7 @@ jobs:
           cd .build/preview
           shasum -a 256 Codex-Account-Switcher-macos-adhoc-preview.zip > Codex-Account-Switcher-macos-adhoc-preview.zip.sha256
           shasum -a 256 -c Codex-Account-Switcher-macos-adhoc-preview.zip.sha256
+          printf 'source_commit=%s\n' "$GITHUB_SHA" > source-commit.txt
       - name: Upload temporary preview artifact only
         uses: actions/upload-artifact@v4
         with:
@@ -49,5 +56,6 @@ jobs:
           path: |
             .build/preview/Codex-Account-Switcher-macos-adhoc-preview.zip
             .build/preview/Codex-Account-Switcher-macos-adhoc-preview.zip.sha256
+            .build/preview/source-commit.txt
           if-no-files-found: error
           retention-days: 14

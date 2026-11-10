@@ -37,4 +37,65 @@ struct DesktopControllerTests {
             Issue.record("Unexpected error: \(error)")
         }
     }
+
+    @Test func fallbackAcceptsOnlyActualCodexBundleIdentifiers() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("codex-desktop-identity-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func mockApp(_ name: String, identifier: String) throws -> URL {
+            let app = root.appendingPathComponent(name)
+            let macOS = app.appendingPathComponent("Contents/MacOS")
+            try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+            let info: [String: String] = [
+                "CFBundleIdentifier": identifier,
+                "CFBundleName": name,
+                "CFBundleExecutable": "MockApp",
+                "CFBundlePackageType": "APPL",
+            ]
+            let plist = try PropertyListSerialization.data(
+                fromPropertyList: info, format: .xml, options: 0)
+            try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
+            let executable = macOS.appendingPathComponent("MockApp")
+            try Data("#!/bin/sh\nexit 0\n".utf8).write(to: executable)
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: executable.path)
+            return app
+        }
+
+        let unrelated = try mockApp("ChatGPT.app", identifier: "com.openai.chatgpt")
+        let correct = try mockApp("Codex.app", identifier: "com.openai.codex")
+        let misleading = try mockApp("WrongCodex.app", identifier: "com.example.codex")
+        let desktop = DesktopController()
+        #expect(!desktop.isCodexApplication(unrelated))
+        #expect(desktop.isCodexApplication(correct))
+        #expect(!desktop.isCodexApplication(misleading))
+        #expect(!desktop.isCodexApplication(root.appendingPathComponent("Missing.app")))
+
+        // A stale Launch Services registration must not select a foreign app.
+        // The fallback must skip ChatGPT and select only the Codex bundle.
+        #expect(desktop.selectApplication(
+            registeredURLs: [unrelated],
+            fallbackURLs: [unrelated, correct]) == correct)
+        #expect(desktop.selectApplication(
+            registeredURLs: [correct],
+            fallbackURLs: [unrelated]) == correct)
+        #expect(desktop.selectApplication(
+            registeredURLs: [misleading],
+            fallbackURLs: [unrelated]) == nil)
+        #expect(desktop.selectApplication(
+            registeredURLs: [],
+            fallbackURLs: [unrelated, misleading, correct]) == correct)
+
+        // A user-local Codex.app must remain discoverable even when Launch
+        // Services has not yet registered it. An unrelated local ChatGPT.app
+        // must not be accepted in its place.
+        let personalCodex = try mockApp("Applications/Codex.app", identifier: "com.openai.codex")
+        let personalChatGPT = try mockApp("Applications/ChatGPT.app", identifier: "com.openai.chatgpt")
+        let fallbackURLs = desktop.fallbackApplicationURLs(homeDirectory: root)
+        #expect(fallbackURLs.contains(personalCodex))
+        #expect(fallbackURLs.contains(personalChatGPT))
+        let personalCandidates = fallbackURLs.filter { $0.path.hasPrefix(root.path + "/") }
+        #expect(desktop.selectApplication(registeredURLs: [], fallbackURLs: personalCandidates) == personalCodex)
+    }
 }

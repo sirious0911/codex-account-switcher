@@ -33,24 +33,31 @@ private struct MenuBarStatusLabel: View {
                             .offset(x: 2, y: -1)
                     }
                 }
-            if model.settings.showsMenuBarPercentage,
-               let remainingPercent = model.activeRemainingPercent {
-                Text("\(remainingPercent)%")
-                    .monospacedDigit()
+            if model.settings.showsMenuBarPercentage {
+                Text(currentQuota.label)
+                    .font(.system(size: 11, weight: .medium).monospacedDigit())
+                    .help(currentQuota.detail)
             }
         }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(menuBarAccessibilityLabel)
     }
 
+    private var currentQuota: MenuBarQuotaPresentation {
+        let state = model.activeAccountID.flatMap { model.usageStates[$0] }
+        return MenuBarQuotaPresentation.make(
+            state: state,
+            identityConfirmed: model.activeAccountID != nil && model.activeIdentityConfirmed,
+            preferredWindow: model.settings.statusBarUsageWindow
+        )
+    }
+
     private var menuBarAccessibilityLabel: String {
         let updateStatus = updater.availableVersion.map { ", " + model.format("update_available", $0) } ?? ""
-        guard model.settings.showsMenuBarPercentage,
-              let remainingPercent = model.activeRemainingPercent
-        else {
+        guard model.settings.showsMenuBarPercentage else {
             return "Codex Account Switcher" + updateStatus
         }
-        return "Codex Account Switcher, \(remainingPercent)%" + updateStatus
+        return "Codex Account Switcher, " + currentQuota.label + updateStatus
     }
 }
 

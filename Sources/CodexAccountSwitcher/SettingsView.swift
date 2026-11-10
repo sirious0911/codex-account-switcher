@@ -1,3 +1,4 @@
+import Foundation
 import SwitcherCore
 import SwiftUI
 
@@ -5,6 +6,13 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var updater: AppUpdater
     let onBack: () -> Void
+
+    // Per-Mac UI intent, intentionally not cross-device synchronization
+    // or an authorization to send a Telegram message.
+    @AppStorage("TelegramDeviceRole") private var telegramDeviceRole = "viewer"
+    @AppStorage("TelegramNotificationsRequested") private var telegramNotificationsRequested = false
+    @AppStorage("TelegramFiveHourRequested") private var telegramFiveHourRequested = true
+    @AppStorage("TelegramWeeklyRequested") private var telegramWeeklyRequested = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,8 +22,11 @@ struct SettingsView: View {
                 onBack: onBack
             )
             Divider()
-
-            sectionLabel("settings_general")
+            // Keep the expanded Telegram controls reachable within a compact
+            // macOS menu-bar popover instead of growing beyond the display.
+            ScrollView {
+                VStack(spacing: 0) {
+                    sectionLabel("settings_general")
             settingRow("launch_at_login") {
                 settingSwitch("launch_at_login", isOn: Binding(
                     get: { model.launchesAtLogin },
@@ -91,6 +102,59 @@ struct SettingsView: View {
             }
             .modifier(SettingsDetail())
 
+            Text("Telegram 알림")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 2)
+            HStack(spacing: 12) {
+                Text("이 Mac의 역할")
+                Spacer(minLength: 8)
+                Picker("Telegram PC 역할", selection: $telegramDeviceRole) {
+                    Text("Viewer — 사용량 표시만").tag("viewer")
+                    Text("Sender — 이 Mac 발송 담당(예정)").tag("sender")
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            .modifier(SettingsRowLayout())
+            HStack(spacing: 12) {
+                Text("Telegram 알림 ON/OFF (발송 준비 설정)")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                settingSwitch("Telegram 알림 ON/OFF (발송 준비 설정)", isOn: $telegramNotificationsRequested)
+            }
+            .modifier(SettingsRowLayout())
+            rowDivider
+            HStack(spacing: 12) {
+                Text("5시간 100% 초기화 → 모니터 봇(묵음)")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                settingSwitch("5시간 100% 초기화 → 모니터 봇(묵음)", isOn: $telegramFiveHourRequested)
+            }
+            .modifier(SettingsRowLayout())
+            rowDivider
+            HStack(spacing: 12) {
+                Text("7일 100% 초기화 → 얼럿 봇")
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                settingSwitch("7일 100% 초기화 → 얼럿 봇", isOn: $telegramWeeklyRequested)
+            }
+            .modifier(SettingsRowLayout())
+            Text("이 기기: \(ProcessInfo.processInfo.hostName) · " +
+                 "저장된 역할: \(telegramRoleSummary) · " +
+                 "알림 요청: \(telegramRequestSummary)")
+                .foregroundStyle(.secondary)
+                .modifier(SettingsDetail())
+            Text("실제 Telegram 발송: 미연결. 설정은 이 Mac에만 저장됩니다. " +
+                 "Sender 선택만으로 다른 PC의 Sender를 중지하거나 메시지를 발송하지 않습니다. " +
+                 "단일 발송자 확인 및 별도 전송 검증이 필요합니다.")
+                .foregroundStyle(.secondary)
+                .modifier(SettingsDetail())
+
             sectionLabel("settings_updates")
             settingRow("automatically_check_updates") {
                 settingSwitch("automatically_check_updates", isOn: Binding(
@@ -118,11 +182,22 @@ struct SettingsView: View {
                     .foregroundStyle(.orange)
                     .modifier(SettingsDetail())
             }
+                }
+                .padding(.bottom, 6)
+            }
+            .frame(maxHeight: 520)
         }
-        .padding(.bottom, 6)
         .font(.system(size: 13))
         .controlSize(.small)
         .onAppear { model.refreshLaunchAtLoginStatus() }
+    }
+
+    private var telegramRoleSummary: String {
+        telegramDeviceRole == "sender" ? "Sender 요청(미승인)" : "Viewer"
+    }
+
+    private var telegramRequestSummary: String {
+        telegramNotificationsRequested ? "ON(요청)" : "OFF"
     }
 
     private var rowDivider: some View {

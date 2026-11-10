@@ -339,6 +339,19 @@ internal static class Program
             "Opening the monitor must not issue a change or sign-in command.");
         Render(window, Path.Combine(output, "monitor-zh.png"));
         var texts = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(texts.Contains("원격 기기 사용량 (P3)") &&
+               texts.Any(text => text.Contains("Mac 5H: ?") &&
+                                 text.Contains("Mac 7D: ?") &&
+                                 text.Contains("Mac R: ?")),
+            "Remote quota must be an independent UNKNOWN view until opt-in.");
+        Assert(All<PasswordBox>(window).Count(x =>
+                   System.Windows.Automation.AutomationProperties.GetName(x) ==
+                       "원격 조회 자격정보") == 1,
+            "Remote viewer must request an ephemeral password, not persist it.");
+        Assert(All<Button>(window).Any(x =>
+                   System.Windows.Automation.AutomationProperties.GetName(x) ==
+                       "원격 사용량 연결"),
+            "Remote viewer must require explicit connection.");
         Assert(texts.Any(text => text.Contains("personal@example.test")) &&
                texts.Any(text => text.Contains("studio@example.test")),
             "Monitor must show both account snapshot rows.");

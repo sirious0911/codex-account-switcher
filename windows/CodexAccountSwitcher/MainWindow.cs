@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using CodexAccountSwitcher.Core;
 
 namespace CodexAccountSwitcher;
@@ -22,6 +23,15 @@ public sealed class MainWindow : Window
     private AccountRow? target;
     private string? localError;
     private bool closingForExit;
+    // P3 remote viewing is explicit, read-only, memory-only, and separate
+    // from the local active-profile taskbar publication gate.
+    private QuotaRelayHttpsViewer? remoteViewer;
+    private QuotaRelayReadOnlyResult? remoteObservation;
+    private string? remoteSourceDevice;
+    private bool remoteReading;
+    private readonly DispatcherTimer remotePoll = new() {
+        Interval = TimeSpan.FromMinutes(6)
+    };
     public bool IsBusy => client.State.IsMutating;
     public string CurrentPage => page;
     private AccountSnapshot State => client.State;
@@ -40,13 +50,20 @@ public sealed class MainWindow : Window
         WindowStartupLocation = WindowStartupLocation.CenterScreen;
         MaxHeight = SystemParameters.WorkArea.Height - 24;
         client.Changed += Render; this.native.Changed += Render;
+        remotePoll.Tick += (_, _) => _ = RefreshRemoteAsync();
         PreviewKeyDown += (_, e) => { if (e.Key == Key.Escape && !IsBusy && page != "accounts") { Navigate("accounts"); e.Handled = true; } };
         Closing += (_, e) => {
             if (closingForExit) return;
             e.Cancel = true;
             Hide();
         };
-        Closed += (_, _) => { client.Changed -= Render; this.native.Changed -= Render; };
+        Closed += (_, _) => {
+            remotePoll.Stop();
+            remoteViewer?.Dispose();
+            remoteViewer = null;
+            client.Changed -= Render;
+            this.native.Changed -= Render;
+        };
         Render();
     }
 
@@ -260,6 +277,7 @@ public sealed class MainWindow : Window
         note.TextWrapping = TextWrapping.Wrap;
         note.Margin = new Thickness(0, 0, 0, 12);
         content.Children.Add(note);
+        RemoteQuotaSection(content);
         var rows = MonitorOverview.From(State);
         if (rows.Count == 0) content.Children.Add(Text(T("no_accounts"), 12, muted: true));
         foreach (var row in rows) {
@@ -301,6 +319,149 @@ public sealed class MainWindow : Window
         }
         content.Children.Add(Button(T("monitor_refresh"), () => _ = Run("refresh"), "\uE72C", left: true));
         body.Children.Add(content);
+    }
+
+
+    private void RemoteQuotaSection(StackPanel content)
+    {
+        var heading = Text("원격 기기 사용량 (P3)", 13, bold: true);
+        heading.Margin = new Thickness(0, 5, 0, 7);
+        content.Children.Add(heading);
+
+        var note = Text(
+            "Windows 로컬 사용량과 분리된 조회 전용 영역입니다. "
+            + "HTTPS 자격정보는 메모리에서만 사용하고 저장하지 않습니다. "
+            + "원격 초기화권 R은 현재 P3에서 제공하지 않습니다.", 10.5, muted: true);
+        note.TextWrapping = TextWrapping.Wrap;
+        note.Margin = new Thickness(0, 0, 0, 8);
+        content.Children.Add(note);
+
+        if (remoteViewer is null)
+        {
+            content.Children.Add(Text(
+                "Mac 5H: ?  |  Mac 7D: ?  |  Mac R: ?", 12, muted: true));
+            var address = new TextBox {
+                Text = "", MinHeight = 28,
+                ToolTip = "HTTPS 서버 주소. 예: https://relay.example.com/"
+            };
+            AutomationProperties.SetName(address, "원격 HTTPS 주소");
+            content.Children.Add(Text("HTTPS 연결 주소", 11));
+            content.Children.Add(address);
+
+            var source = new TextBox { Text = "", MinHeight = 28,
+                Margin = new Thickness(0, 4, 0, 0) };
+            AutomationProperties.SetName(source, "원격 기기 ID");
+            content.Children.Add(Text("원격 기기 ID", 11));
+            content.Children.Add(source);
+
+            var access = new PasswordBox { MinHeight = 28,
+                Margin = new Thickness(0, 4, 0, 0) };
+            AutomationProperties.SetName(access, "원격 조회 자격정보");
+            content.Children.Add(Text("조회 전용 자격정보 (저장하지 않음)", 11));
+            content.Children.Add(access);
+            var connect = Button("원격 사용량 연결", () => {
+                try {
+                    if (!Uri.TryCreate(address.Text.Trim(), UriKind.Absolute, out var url))
+                        throw new ArgumentException("유효한 HTTPS 연결 주소가 필요합니다.");
+                    var id = source.Text.Trim();
+                    var candidate = new QuotaRelayHttpsViewer(url, id, access.Password);
+                    access.Clear();
+                    remoteViewer?.Dispose();
+                    remoteViewer = candidate;
+                    remoteSourceDevice = id;
+                    remoteObservation = null;
+                    remotePoll.Start();
+                    _ = RefreshRemoteAsync();
+                    Render();
+                } catch (ArgumentException) {
+                    localError = "HTTPS 주소, 원격 기기 ID, 조회 전용 자격정보를 확인하세요.";
+                    access.Clear();
+                    Render();
+                }
+            }, left: true);
+            connect.Margin = new Thickness(0, 10, 0, 12);
+            content.Children.Add(connect);
+            content.Children.Add(Rule());
+            return;
+        }
+
+        content.Children.Add(Text(
+            "원격 소스: " + (remoteSourceDevice ?? "알 수 없음")
+            + "  |  계정 전환·Telegram 발송 권한 없음", 11, muted: true));
+
+        var current = remoteObservation?.Snapshot;
+        var age = current is null ? TimeSpan.MaxValue
+            : DateTimeOffset.UtcNow - current.ObservedAt;
+        var readable = remoteObservation?.Status is
+            "FRESH_READ_ONLY" or "AGED_READ_ONLY"
+            && age >= TimeSpan.FromSeconds(-3) && age < TimeSpan.FromMinutes(6);
+        if (readable && current is not null)
+        {
+            if (current.FiveHourRemainingPercent is int five)
+                content.Children.Add(UsageLine("Mac 5H", five,
+                    current.FiveHourResetAt is DateTimeOffset reset
+                        ? Reset(reset) : null));
+            else content.Children.Add(Text("Mac 5H: ?", 11, muted: true));
+            if (current.SevenDayRemainingPercent is int week)
+                content.Children.Add(UsageLine("Mac 7D", week,
+                    current.SevenDayResetAt is DateTimeOffset reset
+                        ? Reset(reset) : null));
+            else content.Children.Add(Text("Mac 7D: ?", 11, muted: true));
+            content.Children.Add(Text("Mac R: ? (P3 원격 미지원)", 11, muted: true));
+            var ageNote=Text(
+                "원격 관측: " + current.ObservedAt.ToLocalTime()
+                    .ToString("yyyy-MM-dd HH:mm", CultureInfo.CurrentCulture)
+                + " · " + remoteObservation!.Status, 10.5, muted: true);
+            content.Children.Add(ageNote);
+        }
+        else
+        {
+            content.Children.Add(Text(
+                "Mac 5H: ?  |  Mac 7D: ?  |  Mac R: ?", 12, muted: true));
+            var state = remoteReading ? "조회 중"
+                : remoteObservation?.Status ?? "아직 수신되지 않음";
+            content.Children.Add(Text("원격 상태: " + state, 10.5, muted: true));
+        }
+
+        var controls = new StackPanel {
+            Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 12)
+        };
+        var refresh = Button(remoteReading ? "조회 중" : "원격 새로고침",
+            () => _ = RefreshRemoteAsync(), left: true);
+        refresh.IsEnabled = !remoteReading;
+        controls.Children.Add(refresh);
+        var disconnect = Button("원격 연결 해제", () => {
+            remotePoll.Stop();
+            remoteViewer?.Dispose();
+            remoteViewer = null;
+            remoteObservation = null;
+            remoteSourceDevice = null;
+            Render();
+        }, left: true);
+        disconnect.Margin = new Thickness(8, 0, 0, 0);
+        controls.Children.Add(disconnect);
+        content.Children.Add(controls);
+        content.Children.Add(Rule());
+    }
+
+    private async Task RefreshRemoteAsync()
+    {
+        var current = remoteViewer;
+        if (current is null || remoteReading) return;
+        remoteReading = true;
+        try {
+            var result = await current.FetchAsync(DateTimeOffset.UtcNow);
+            if (ReferenceEquals(current, remoteViewer))
+                remoteObservation = result;
+        } catch (Exception) {
+            if (ReferenceEquals(current, remoteViewer))
+                remoteObservation = new QuotaRelayReadOnlyResult(
+                    "HOLD_REMOTE_READ_FAILURE", null);
+        } finally {
+            remoteReading = false;
+            if (page == "monitor" && !closingForExit)
+                Render();
+        }
     }
 
     private void Settings(StackPanel body)

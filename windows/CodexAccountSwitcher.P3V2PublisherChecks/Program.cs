@@ -206,6 +206,63 @@ using (var pending = new RecordingHandler(async (_,ct) =>
     Check(pending.Count==1,"dispose never retries network");
 }
 
+// Full in-memory pipeline: existing-style active account events ->
+// V2 data projection -> nonblocking queued PUT publisher -> injected handler.
+var eventSource = new SyntheticQuotaEvents(active);
+var observedClock = clock.AddSeconds(-5);
+using (var accepted = new RecordingHandler((_,_) =>
+    Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted))))
+using (var sender = new QuotaRelayV2HttpsPublisher(origin,sourceId,Issue,accepted))
+using (var pipeline = new VerifiedQuotaV2PublishRuntimeAdapter(
+    eventSource,sourceId,sender,()=>observedClock))
+{
+    observedClock=clock;
+    eventSource.Observe(sample);
+    var task=pipeline.LastAttempt;
+    Check(task is not null,"verified event generated asynchronous PUT task");
+    await task!.WaitAsync(TimeSpan.FromSeconds(5));
+    Check(accepted.Count==1,"event stream triggered exactly one PUT");
+    eventSource.Observe(sample);
+    Check(accepted.Count==1,"repeated observation did not trigger a second PUT");
+}
+
+var switchEvents = new SyntheticQuotaEvents(active);
+var waitingClock=clock.AddSeconds(-5);
+var inflightStarted = new TaskCompletionSource<bool>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+var inflightCanceled = new TaskCompletionSource<bool>(
+    TaskCreationOptions.RunContinuationsAsynchronously);
+using (var blocked = new RecordingHandler(async (_,ct) =>
+{
+    inflightStarted.TrySetResult(true);
+    try
+    {
+        await Task.Delay(30_000,ct);
+    }
+    catch(OperationCanceledException)
+    {
+        inflightCanceled.TrySetResult(true);
+        throw;
+    }
+    return new HttpResponseMessage(HttpStatusCode.Accepted);
+}))
+using (var sender = new QuotaRelayV2HttpsPublisher(origin,sourceId,Issue,blocked))
+using (var pipeline = new VerifiedQuotaV2PublishRuntimeAdapter(
+    switchEvents,sourceId,sender,()=>waitingClock))
+{
+    waitingClock=clock;
+    switchEvents.Observe(sample);
+    await inflightStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    Check(pipeline.LastAttempt is not null,"async pipeline pending before switch");
+    switchEvents.Observe(new CodexMonitorWireSample(
+        clock.AddMilliseconds(-500).ToUnixTimeMilliseconds(),rawProvider,profileId));
+    Check(blocked.Count==1,"a newer observation does not queue while busy");
+    switchEvents.Switch();
+    await inflightCanceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    if(pipeline.LastAttempt is { } last) await last.WaitAsync(TimeSpan.FromSeconds(5));
+    Check(blocked.Count==1,"switch canceled pending transport without retry");
+}
+
 Console.WriteLine("P3_WINDOWS_V2_HTTPS_PUBLISHER_CHECKS_PASS="+checks);
 Console.WriteLine("REAL_CODEX_CALLS=0 EXTERNAL_NETWORK=0 TELEGRAM=0 APP_ACTIVATION=0");
 
@@ -221,5 +278,21 @@ sealed class RecordingHandler(
         if (request.RequestUri?.Scheme!="https"||request.Method!=HttpMethod.Put)
             throw new InvalidOperationException("Synthetic PUT only");
         return respond(request,cancellationToken);
+    }
+}
+
+sealed class SyntheticQuotaEvents(AccountSnapshot initial) : IVerifiedQuotaEventSource
+{
+    public AccountSnapshot State {get;private set;}=initial;
+    public event Action? Changed;
+    public event Action<CodexMonitorWireSample>? MonitorObserved;
+    public event Action? SwitchRequested;
+    public void Observe(CodexMonitorWireSample observation)=>
+        MonitorObserved?.Invoke(observation);
+    public void Switch()=>SwitchRequested?.Invoke();
+    public void Update(AccountSnapshot state)
+    {
+        State=state;
+        Changed?.Invoke();
     }
 }

@@ -6,6 +6,7 @@ on:
     branches: [feature/provider-extensibility]
     paths:
       - "windows/CodexAccountSwitcher.Core/QuotaRelayV2HttpsPublisher.cs"
+      - "windows/CodexAccountSwitcher.Core/VerifiedQuotaV2PublishRuntimeAdapter.cs"
       - "windows/CodexAccountSwitcher.P3V2PublisherChecks/**"
       - ".github/workflows/p3-v2-windows-publisher.yml"
 

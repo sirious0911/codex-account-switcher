@@ -16,6 +16,10 @@ swiftc \
   -Xlinker -rpath -Xlinker "$output_dir" \
   "$project_dir/Sources/CodexAccountSwitcher/DesktopController.swift" \
   "$project_dir/Sources/CodexAccountSwitcher/MacMonitorLedger.swift" \
+  "$project_dir/Sources/CodexAccountSwitcher/MacQuotaRelayPublisher.swift" \
+  "$project_dir/Sources/CodexAccountSwitcher/MacRemoteQuotaViewer.swift" \
+  "$project_dir/Sources/CodexAccountSwitcher/MacQuotaV2FrameEncoder.swift" \
+  "$project_dir/Sources/CodexAccountSwitcher/MacQuotaV2HttpsPublisher.swift" \
   "$project_dir/Sources/CodexAccountSwitcher/AppModel.swift" \
   "$project_dir/Checks/CoreChecks.swift" \
   -framework AppKit \

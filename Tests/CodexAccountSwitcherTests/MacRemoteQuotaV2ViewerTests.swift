@@ -91,7 +91,7 @@ struct MacRemoteQuotaV2ViewerTests {
         #expect(zero.snapshot?.resetCreditExpiries == nil)
 
         let freeClient = try viewer()
-        let rOnly = freeClient.inspect(frame(free: true, expiry: nil), now: now)
+        let rOnly = freeClient.inspect(frame(expiry: nil, free: true), now: now)
         #expect(rOnly.snapshot?.resetCreditsRemaining == 2)
         #expect(rOnly.snapshot?.fiveHourPercent == nil)
         #expect(rOnly.snapshot?.sevenDayPercent == nil)
@@ -136,7 +136,7 @@ struct MacRemoteQuotaV2ViewerTests {
             frame(count:0,expiry:[expiryA]),
             frame(count:1,expiry:[expiryA,expiryB]),
             frame(count:nil,expiry:[expiryA]),
-            frame(free:true,count:nil,expiry:nil),
+            frame(count:nil,expiry:nil,free:true),
             frame(expiry:[1_900_200_000])
         ] {
             let client = try viewer()

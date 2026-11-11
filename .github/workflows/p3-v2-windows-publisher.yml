@@ -1,0 +1,41 @@
+name: P3 V2 Windows read-only HTTPS publisher code
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "windows/CodexAccountSwitcher.Core/QuotaRelayV2HttpsPublisher.cs"
+      - "windows/CodexAccountSwitcher.P3V2PublisherChecks/**"
+      - ".github/workflows/p3-v2-windows-publisher.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  publisher-data-only:
+    name: Windows V2 202-once HTTPS publish with synthetic transport
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Compile whole Windows WPF app, without running or installing
+        shell: pwsh
+        run: |
+          dotnet build windows/CodexAccountSwitcher/CodexAccountSwitcher.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Windows V2 publisher build failed' }
+      - name: Run injection-only exact V2 PUT and cancel tests
+        shell: pwsh
+        run: |
+          dotnet run --project windows/CodexAccountSwitcher.P3V2PublisherChecks -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'V2 HTTPS PUT synthetic checks failed' }
+      - name: Run previously established V2 observed event binding
+        shell: pwsh
+        run: |
+          dotnet run --project windows/CodexAccountSwitcher.P3V2EventBridgeChecks -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'V2 observer regression failed' }

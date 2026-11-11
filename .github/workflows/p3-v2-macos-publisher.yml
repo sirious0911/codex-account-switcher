@@ -6,6 +6,7 @@ on:
     branches: [feature/provider-extensibility]
     paths:
       - "Sources/CodexAccountSwitcher/MacQuotaV2HttpsPublisher.swift"
+      - "Sources/CodexAccountSwitcher/AppModel.swift"
       - "Tests/CodexAccountSwitcherTests/MacQuotaV2HttpsPublisherTests.swift"
       - ".github/workflows/p3-v2-macos-publisher.yml"
 

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
@@ -14,12 +15,33 @@ using Microsoft.Win32;
 
 namespace CodexAccountSwitcher;
 
+/// <summary>
+/// Explicit synthetic-only V2 startup injection for non-operating tests.
+/// The public App constructors never provide this value, and no environment
+/// variable, saved preference or command line option can enable it.
+/// </summary>
+internal sealed record P3V2SyntheticStartupEnrollment(
+    Uri Origin, string SourceDeviceID,
+    Func<CancellationToken, ValueTask<string?>> CredentialProvider,
+    HttpMessageHandler SyntheticTransport);
+
 public partial class App : Application
 {
     public static Uri IconUri { get; } = new("pack://application:,,,/Codex-Account-Switcher-windows-x64;component/app.ico");
     private readonly bool startRuntime;
     public App() : this(true) { }
     public App(bool startRuntime) { this.startRuntime = startRuntime; }
+    internal App(bool startRuntime, P3V2SyntheticStartupEnrollment enrollment)
+        : this(startRuntime)
+    {
+        // Tests can only supply an in-memory HTTP handler. There is no
+        // production/real-network startup enrollment entry point.
+        syntheticV2Enrollment = enrollment ??
+            throw new ArgumentNullException(nameof(enrollment));
+    }
+    private readonly P3V2SyntheticStartupEnrollment? syntheticV2Enrollment;
+    private QuotaRelayV2HttpsPublisher? syntheticV2Publisher;
+    private VerifiedQuotaV2PublishRuntimeAdapter? syntheticV2Runtime;
     private Mutex? instance;
     private bool ownsMutex;
     private EventWaitHandle? activateWindow;
@@ -51,6 +73,18 @@ public partial class App : Application
             if (!ownsMutex) { activateWindow.Set(); Shutdown(); return; }
             ApplyTheme();
             client = new CoreClient(HostRuntime.Resolve(Assembly.GetExecutingAssembly()), dataPath);
+            // Default OFF: App() and App(bool) do not supply an enrollment.
+            // Only an explicit internal synthetic test constructor creates a
+            // V2 sender. Never read credentials or transmit in normal startup.
+            if (syntheticV2Enrollment is { } testEnrollment)
+            {
+                syntheticV2Publisher = new QuotaRelayV2HttpsPublisher(
+                    testEnrollment.Origin, testEnrollment.SourceDeviceID,
+                    testEnrollment.CredentialProvider, testEnrollment.SyntheticTransport);
+                syntheticV2Runtime = new VerifiedQuotaV2PublishRuntimeAdapter(
+                    new CoreClientQuotaEventAdapter(client),
+                    testEnrollment.SourceDeviceID, syntheticV2Publisher);
+            }
             monitorWorker = new LocalMonitorWorker(dataPath);
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
@@ -155,6 +189,8 @@ public partial class App : Application
     private async Task QuitAsync() {
         if (exiting || window?.IsBusy == true) return;
         exiting = true; updates?.Stop();
+        syntheticV2Runtime?.Dispose();
+        syntheticV2Publisher?.Dispose();
         adaptiveUsage?.Dispose();
         activationListener?.Unregister(null);
         if (client != null) {
@@ -200,6 +236,8 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e) {
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         taskbarPanel?.Dispose();
+        syntheticV2Runtime?.Dispose();
+        syntheticV2Publisher?.Dispose();
         adaptiveUsage?.Dispose();
         activateWindow?.Dispose();
         if (ownsMutex) instance?.ReleaseMutex(); instance?.Dispose();

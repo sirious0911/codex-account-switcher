@@ -96,22 +96,26 @@ struct MacQuotaV2HttpsPublisherTests {
 
     @Test func rejectsInsecureOriginAndShortCredentials() async throws {
         let fixture = MacV2SyntheticTransport(status: 202)
-        #expect(MacQuotaV2HttpsPublisher(
+        let insecure = MacQuotaV2HttpsPublisher(
             origin: "http://example.invalid/",sourceDeviceID: "macmini-a",
             credentialProvider: { testCredential },
-            syntheticTransport: { req in try await fixture.send(req) }) == nil)
-        #expect(MacQuotaV2HttpsPublisher(
+            syntheticTransport: { req in try await fixture.send(req) })
+        #expect(insecure == nil)
+        let subpath = MacQuotaV2HttpsPublisher(
             origin: "https://example.invalid/other",sourceDeviceID: "macmini-a",
             credentialProvider: { testCredential },
-            syntheticTransport: { req in try await fixture.send(req) }) == nil)
-        #expect(MacQuotaV2HttpsPublisher(
+            syntheticTransport: { req in try await fixture.send(req) })
+        #expect(subpath == nil)
+        let invalidDevice = MacQuotaV2HttpsPublisher(
             origin: "https://example.invalid/",sourceDeviceID: "bad/id",
             credentialProvider: { testCredential },
-            syntheticTransport: { req in try await fixture.send(req) }) == nil)
-        let invalid = try #require(MacQuotaV2HttpsPublisher(
+            syntheticTransport: { req in try await fixture.send(req) })
+        #expect(invalidDevice == nil)
+        let candidate = MacQuotaV2HttpsPublisher(
             origin: "https://example.invalid/",sourceDeviceID: "macmini-a",
             credentialProvider: { "short" },
-            syntheticTransport: { req in try await fixture.send(req) }))
+            syntheticTransport: { req in try await fixture.send(req) })
+        let invalid = try #require(candidate)
         #expect(!(await invalid.publishOnce(try verifiedFrame())))
         #expect((await fixture.evidence()).calls == 0)
     }

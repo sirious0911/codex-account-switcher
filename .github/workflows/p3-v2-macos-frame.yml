@@ -1,0 +1,28 @@
+name: P3 V2 macOS read-only R frame verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "Sources/CodexAccountSwitcher/MacQuotaV2FrameEncoder.swift"
+      - "Tests/CodexAccountSwitcherTests/MacQuotaV2FrameEncoderTests.swift"
+      - ".github/workflows/p3-v2-macos-frame.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mac-v2-r-frame:
+    name: macOS Swift V2 R data-only encoder
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify native Swift tools
+        run: |
+          xcode-select -p
+          swift --version
+      - name: Compile and verify all Swift data-only fixtures
+        run: swift test

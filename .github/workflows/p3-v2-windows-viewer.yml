@@ -1,0 +1,42 @@
+name: P3 V2 Windows R viewer and native WPF checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "windows/CodexAccountSwitcher.Core/QuotaRelayV2HttpsViewer.cs"
+      - "windows/CodexAccountSwitcher.P3V2ViewerChecks/**"
+      - "windows/CodexAccountSwitcher/MainWindow.cs"
+      - ".github/workflows/p3-v2-windows-viewer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-v2-viewer:
+    name: Windows opt-in V2 R display and synthetic GET
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build actual WPF Windows application
+        shell: pwsh
+        run: |
+          dotnet build windows/CodexAccountSwitcher/CodexAccountSwitcher.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Windows app build failed' }
+      - name: Test V2 R read-only viewer with injected HTTPS response
+        shell: pwsh
+        run: |
+          dotnet run --project windows/CodexAccountSwitcher.P3V2ViewerChecks -c Release
+          if ($LASTEXITCODE -ne 0) { throw 'V2 GET model checks failed' }
+      - name: Test WPF monitor UI without launching installed app
+        shell: pwsh
+        run: |
+          dotnet run --project windows/CodexAccountSwitcher.UiChecks -c Release -- windows/artifacts/p3-v2-ci
+          if ($LASTEXITCODE -ne 0) { throw 'Windows WPF UI checks failed' }

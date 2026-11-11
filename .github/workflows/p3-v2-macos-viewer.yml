@@ -1,0 +1,29 @@
+name: P3 V2 macOS R remote viewer and native Swift UI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "Sources/CodexAccountSwitcher/MacRemoteQuotaV2Viewer.swift"
+      - "Sources/CodexAccountSwitcher/MacRemoteQuotaPanel.swift"
+      - "Tests/CodexAccountSwitcherTests/MacRemoteQuotaV2ViewerTests.swift"
+      - ".github/workflows/p3-v2-macos-viewer.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  mac-v2-viewer:
+    name: macOS opt-in V2 R read-only viewer
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check Swift toolchain
+        run: |
+          xcode-select -p
+          swift --version
+      - name: Build full app and run native Swift fixtures
+        run: swift test

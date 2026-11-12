@@ -39,6 +39,7 @@ internal static class Program
             Directory.CreateDirectory(output);
             TelegramSenderScriptContractTest.Run();
             WindowsPackagedTelegramScriptsTest.Run(output);
+            WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
                 System.Reflection.BindingFlags.Instance |

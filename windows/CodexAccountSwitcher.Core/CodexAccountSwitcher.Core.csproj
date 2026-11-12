@@ -6,6 +6,7 @@
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="CodexAccountSwitcher.Checks" />
+    <InternalsVisibleTo Include="CodexAccountSwitcher.UiChecks" />
     <ProjectReference Include="../../monitor/dotnet-core/CodexUsageMonitor.Core.csproj" />
   </ItemGroup>
 </Project>

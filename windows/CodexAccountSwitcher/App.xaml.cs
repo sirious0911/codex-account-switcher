@@ -76,7 +76,9 @@ public partial class App : Application
             activateWindow = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CodexAccountSwitcher-Activate-" + key);
             if (!ownsMutex) { activateWindow.Set(); Shutdown(); return; }
             ApplyTheme();
-            client = new CoreClient(HostRuntime.Resolve(Assembly.GetExecutingAssembly()), dataPath);
+            var hostPath = HostRuntime.Resolve(Assembly.GetExecutingAssembly());
+            var bundledBotScripts = WindowsPackagedTelegramScripts.Inspect(hostPath);
+            client = new CoreClient(hostPath, dataPath);
             // Default OFF: App() and App(bool) do not supply an enrollment.
             // Only an explicit internal synthetic test constructor creates a
             // V2 sender. Never read credentials or transmit in normal startup.
@@ -109,7 +111,8 @@ public partial class App : Application
             }
             window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? [],
                 () => OfflineTelegramRecoveryInbox.Read(dataPath),
-                () => localTelegramSender?.Display ?? "Windows 로컬 Sender: 확인 불가 · 실제 발송 차단"); MainWindow = window;
+                () => localTelegramSender?.Display ?? "Windows 로컬 Sender: 확인 불가 · 실제 발송 차단",
+                () => bundledBotScripts.Display); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -300,6 +303,8 @@ public partial class App : Application
         try {
             Directory.CreateDirectory(Path.Combine(root, "active"));
             var host = HostRuntime.Resolve(Assembly.GetExecutingAssembly());
+            if (!WindowsPackagedTelegramScripts.Inspect(host).BothVerified)
+                throw new IOException("Packaged Telegram sender script hashes failed.");
             await using var core = new CoreClient(host, Path.Combine(root, "data"), Path.Combine(root, "active"));
             await core.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(30));
             await core.CommandAsync("fiveHour", value: true).WaitAsync(TimeSpan.FromSeconds(10));

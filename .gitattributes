@@ -1,0 +1,4 @@
+# Reviewed Telegram sender SHA256 is computed over exact Git blob bytes.
+# Windows Git checkouts must not turn LF into CRLF.
+windows/scripts/send-fivehour100-existing-monitor-bot.ps1 text eol=lf
+windows/scripts/send-weekly100-existing-alert-bot.ps1 text eol=lf

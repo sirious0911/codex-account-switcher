@@ -38,6 +38,7 @@ internal static class Program
             Assert(NativeSettings.LatestWindowsVersion(macOnly.RootElement) == null, "A release without a Windows EXE must never prompt a Windows update.");
             Directory.CreateDirectory(output);
             TelegramSenderScriptContractTest.Run();
+            WindowsPackagedTelegramScriptsTest.Run(output);
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
                 System.Reflection.BindingFlags.Instance |
@@ -219,8 +220,11 @@ internal static class Program
             Assert(mini.IsVisible, "Existing tray can reopen the same minibar window.");
             mini.CloseForExit();
 
-            var window = new MainWindow(client, telegramLocalSenderStatus: () =>
-                "Windows local sender: test-only, actual delivery blocked");
+            var window = new MainWindow(client,
+                telegramLocalSenderStatus: () =>
+                    "Windows local sender: test-only, actual delivery blocked",
+                packagedTelegramScriptsStatus: () =>
+                    "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단");
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)
             using (var trayIcon = new System.Drawing.Icon(stream, 16, 16))
@@ -286,6 +290,9 @@ internal static class Program
             Assert(All<TextBlock>(window).Any(text =>
                 text.Text == "Windows local sender: test-only, actual delivery blocked"),
                 "Settings must show local sender status but never grant delivery.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단"),
+                "Settings must surface bundled Telegram sender readiness without sending.");
             var runningSha = new NativeSettings().RunningExecutableSha256;
             Assert(runningSha is { Length: 64 } &&
                 runningSha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'),

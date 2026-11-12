@@ -21,6 +21,7 @@ public sealed class MainWindow : Window
     private readonly Func<IReadOnlyList<LocalMonitorHistoryRow>> history;
     private readonly Func<OfflineTelegramInboxSnapshot> recoveryInbox;
     private readonly Func<string> localTelegramSenderStatus;
+    private readonly Func<string> bundledTelegramScriptsStatus;
     private string page = "accounts";
     private AccountRow? target;
     private string? localError;
@@ -46,13 +47,16 @@ public sealed class MainWindow : Window
     public MainWindow(IAccountClient client, NativeSettings? native = null,
         Func<IReadOnlyList<LocalMonitorHistoryRow>>? monitorHistory = null,
         Func<OfflineTelegramInboxSnapshot>? telegramRecoveryInbox = null,
-        Func<string>? telegramLocalSenderStatus = null)
+        Func<string>? telegramLocalSenderStatus = null,
+        Func<string>? packagedTelegramScriptsStatus = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
         recoveryInbox = telegramRecoveryInbox ?? (() => OfflineTelegramInboxSnapshot.Empty);
         localTelegramSenderStatus = telegramLocalSenderStatus ??
             (() => "Windows 로컬 Sender: 검증하지 않음 · 실제 발송 차단");
+        bundledTelegramScriptsStatus = packagedTelegramScriptsStatus ??
+            (() => "내장 Telegram 스크립트: 검증되지 않음 · 실제 발송 차단");
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -658,6 +662,9 @@ public sealed class MainWindow : Window
         var localSenderStatus = Text(localTelegramSenderStatus(), 10.5, muted: true);
         localSenderStatus.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(localSenderStatus);
+        var scriptsStatus = Text(bundledTelegramScriptsStatus(), 10.5, muted: true);
+        scriptsStatus.TextWrapping = TextWrapping.Wrap;
+        settings.Children.Add(scriptsStatus);
         var savedBotDirectory = native.TelegramBotDirectory;
         var savedBotStatus = Text(savedBotDirectory is null
             ? "기존 Telegram 봇 폴더: 선택되지 않음 · 실제 전송 차단"

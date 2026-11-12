@@ -37,6 +37,7 @@ internal static class Program
                 """);
             Assert(NativeSettings.LatestWindowsVersion(macOnly.RootElement) == null, "A release without a Windows EXE must never prompt a Windows update.");
             Directory.CreateDirectory(output);
+            TelegramSenderScriptContractTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
                 System.Reflection.BindingFlags.Instance |

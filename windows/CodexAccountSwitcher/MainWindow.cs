@@ -23,6 +23,7 @@ public sealed class MainWindow : Window
     private AccountRow? target;
     private string? localError;
     private bool closingForExit;
+    private string? telegramBotFilesStatus;
     // P3 remote viewing is explicit, read-only, memory-only, and separate
     // from the local active-profile taskbar publication gate.
     private QuotaRelayHttpsViewer? remoteViewer;
@@ -622,6 +623,23 @@ public sealed class MainWindow : Window
             10.5, muted: true);
         telegramState.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(telegramState);
+        var botFileCheck = Button("기존 Telegram 봇 파일 확인 (읽기 전용)", () => {
+            using var picker = new System.Windows.Forms.FolderBrowserDialog {
+                Description = "기존 Telegram 봇 설정 파일이 있는 폴더를 선택하세요.",
+                ShowNewFolderButton = false
+            };
+            if (picker.ShowDialog() != System.Windows.Forms.DialogResult.OK) return;
+            var inspection = TelegramBotFileStatus.Inspect(picker.SelectedPath);
+            telegramBotFilesStatus = inspection.Display;
+            Render();
+        });
+        botFileCheck.Margin = new Thickness(0, 8, 0, 0);
+        settings.Children.Add(botFileCheck);
+        if (telegramBotFilesStatus is not null) {
+            var fileStatusText = Text(telegramBotFilesStatus, 10.5, muted: true);
+            fileStatusText.TextWrapping = TextWrapping.Wrap;
+            settings.Children.Add(fileStatusText);
+        }
         var heading = Text(T("settings_updates"), 14, bold: true); heading.Margin = new Thickness(0, 20, 0, 0); settings.Children.Add(heading);
         Toggle(T("automatically_check_updates"), native.AutomaticallyCheckUpdates, value => native.AutomaticallyCheckUpdates = value);
         var hint = Text(T(native.UpdateError ?? "update_check_hint"), 10.5, muted: true); hint.Margin = new Thickness(0, 0, 0, 12); hint.TextWrapping = TextWrapping.Wrap; settings.Children.Add(hint); settings.Children.Add(Rule());

@@ -296,6 +296,29 @@ internal static class Program
             Assert(All<Button>(window).Any(button =>
                     System.Windows.Automation.AutomationProperties.GetName(button) == "빌드 SHA256 복사"),
                 "Settings must offer copying the full executable SHA256.");
+            var existingBot = All<Button>(window).SingleOrDefault(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "기존 Telegram 봇 파일 확인 (읽기 전용)");
+            Assert(existingBot is not null,
+                "Settings must provide an explicit metadata-only bot-folder check.");
+            var botFixture = Path.Combine(output, "telegram-bot-file-metadata-only");
+            Directory.CreateDirectory(botFixture);
+            var missingBot = TelegramBotFileStatus.Inspect(botFixture);
+            Assert(!missingBot.MonitorBotFilesPresent && !missingBot.AlertBotFilesPresent &&
+                !missingBot.ChatDestinationPresent,
+                "Missing Telegram artifacts must not be shown as connected.");
+            foreach (var filename in new[] { "send-telegram-health.ps1",
+                     "telegram-health-token.dpapi", "send-telegram-alert.ps1",
+                     "telegram-token.dpapi", "telegram-chat-id.txt" })
+                File.WriteAllText(Path.Combine(botFixture, filename), "fixture-only");
+            var foundBot = TelegramBotFileStatus.Inspect(botFixture);
+            Assert(foundBot.MonitorBotFilesPresent && foundBot.AlertBotFilesPresent &&
+                foundBot.ChatDestinationPresent && foundBot.Display.Contains("실제 전송: 미연결"),
+                "Both bot lanes require metadata presence without authorizing any Telegram send.");
+            File.WriteAllText(Path.Combine(botFixture, "telegram-health-token.dpapi"), "");
+            Assert(!TelegramBotFileStatus.Inspect(botFixture).MonitorBotFilesPresent &&
+                TelegramBotFileStatus.Inspect(botFixture).AlertBotFilesPresent,
+                "An empty encrypted bot token must fail closed without inspecting token contents.");
             var telegramPreferences = new NativeSettings().TelegramPreferences;
             var telegramStatus = All<TextBlock>(window).SingleOrDefault(text =>
                 text.Text.StartsWith("이 기기: ", StringComparison.Ordinal));

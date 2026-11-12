@@ -54,6 +54,9 @@ public partial class App : Application
     private FiveHour100RecoveryWorker? fiveHour100Worker;
     private WindowsTelegramLocalSenderLease? localTelegramSender;
     private NativeSettings? nativeSettings;
+    private string? bundledTelegramHostPath;
+    private string existingAmanoBotRouteStatus =
+        "기존 주차대행 Telegram 봇: 복구 이벤트 대기 · 실제 발송 차단";
     // Only the confirmed active profile feeds a WPF child HWND embedded
     // before TrayNotifyWnd, immediately to the left of the ^ chevron.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
@@ -78,6 +81,7 @@ public partial class App : Application
             ApplyTheme();
             var hostPath = HostRuntime.Resolve(Assembly.GetExecutingAssembly());
             var bundledBotScripts = WindowsPackagedTelegramScripts.Inspect(hostPath);
+            bundledTelegramHostPath = hostPath;
             client = new CoreClient(hostPath, dataPath);
             // Default OFF: App() and App(bool) do not supply an enrollment.
             // Only an explicit internal synthetic test constructor creates a
@@ -112,7 +116,8 @@ public partial class App : Application
             window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? [],
                 () => OfflineTelegramRecoveryInbox.Read(dataPath),
                 () => localTelegramSender?.Display ?? "Windows 로컬 Sender: 확인 불가 · 실제 발송 차단",
-                () => bundledBotScripts.Display); MainWindow = window;
+                () => bundledBotScripts.Display,
+                () => existingAmanoBotRouteStatus); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -182,8 +187,14 @@ public partial class App : Application
         // 7D alert detector. No Telegram transport exists in this method.
         try {
             if (client is not null && externalMonitorGate.Allows(sample))
-                weekly100Worker?.Process(sample, client.State,
-                    externalMonitorGate, DateTimeOffset.UtcNow);
+            {
+                var events = weekly100Worker?.Process(sample, client.State,
+                    externalMonitorGate, DateTimeOffset.UtcNow) ?? [];
+                foreach (var detected in events)
+                    PrepareExistingAmanoRoute(
+                        TelegramNotificationLane.WeeklyRecovery,
+                        detected.Key, detected.ObservedAt);
+            }
         }
         catch (Exception ex) {
             System.Diagnostics.Trace.TraceWarning(
@@ -197,13 +208,40 @@ public partial class App : Application
         // sends a real Telegram message, irrespective of the bot's mute state.
         try {
             if (client is not null && externalMonitorGate.Allows(sample))
-                fiveHour100Worker?.Process(sample, client.State,
-                    externalMonitorGate, DateTimeOffset.UtcNow);
+            {
+                var events = fiveHour100Worker?.Process(sample, client.State,
+                    externalMonitorGate, DateTimeOffset.UtcNow) ?? [];
+                foreach (var detected in events)
+                    PrepareExistingAmanoRoute(
+                        TelegramNotificationLane.FiveHourRecovery,
+                        detected.Key, detected.ObservedAt);
+            }
         }
         catch (Exception ex) {
             System.Diagnostics.Trace.TraceWarning(
                 "Five-hour quota mock alert persistence failed: " + ex.GetType().Name);
         }
+    }
+
+    private void PrepareExistingAmanoRoute(
+        TelegramNotificationLane lane, string eventKey, DateTimeOffset observedAt)
+    {
+        // The already-running Amano scripts and their bot credentials are
+        // untouched. Preparing a Codex-specific route never starts a process.
+        var isFiveHour = lane == TelegramNotificationLane.FiveHourRecovery;
+        var preferences = nativeSettings?.TelegramPreferences;
+        if (preferences is null ||
+            !(isFiveHour ? preferences.WantsFiveHour : preferences.WantsWeekly))
+            return;
+        var route = WindowsExistingAmanoBotRoute.Prepare(
+            bundledTelegramHostPath, nativeSettings?.TelegramBotDirectory,
+            lane, eventKey, observedAt);
+        var prefix = isFiveHour ? "5H → 기존 모니터 봇(묵음)" :
+            "7D → 기존 얼럿 봇";
+        existingAmanoBotRouteStatus = prefix +
+            (route is null ? ": 봇 폴더/스크립트 미확인" : ": 전송 경로 준비됨") +
+            " · 실제 발송 차단";
+        // No invocation, approval flags, DPAPI reads, or Telegram network.
     }
 
     private void InvalidateFiveHour100(Guid? profileID)

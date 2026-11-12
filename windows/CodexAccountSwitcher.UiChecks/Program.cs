@@ -39,6 +39,7 @@ internal static class Program
             Directory.CreateDirectory(output);
             TelegramSenderScriptContractTest.Run();
             WindowsPackagedTelegramScriptsTest.Run(output);
+            WindowsExistingAmanoBotRouteTest.Run(output);
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
@@ -225,7 +226,9 @@ internal static class Program
                 telegramLocalSenderStatus: () =>
                     "Windows local sender: test-only, actual delivery blocked",
                 packagedTelegramScriptsStatus: () =>
-                    "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단");
+                    "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단",
+                existingAmanoBotStatus: () =>
+                    "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단");
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)
             using (var trayIcon = new System.Drawing.Icon(stream, 16, 16))
@@ -294,6 +297,9 @@ internal static class Program
             Assert(All<TextBlock>(window).Any(text =>
                 text.Text == "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단"),
                 "Settings must surface bundled Telegram sender readiness without sending.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단"),
+                "Settings must identify reuse of the existing Amano bot, without sending.");
             var runningSha = new NativeSettings().RunningExecutableSha256;
             Assert(runningSha is { Length: 64 } &&
                 runningSha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'),

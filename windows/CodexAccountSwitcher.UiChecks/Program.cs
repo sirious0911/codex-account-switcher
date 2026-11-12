@@ -185,9 +185,11 @@ internal static class Program
             const string miniRaw = """
                 {"accountId":"ui-fixture","ordinaryUsageAllowed":null,
                  "rateLimitsByLimitId":{"codex":{"planType":null,
-                   "primary":{"usedPercent":15,"windowDurationMins":300},
-                   "secondary":{"usedPercent":38,"windowDurationMins":10080}}},
-                 "rateLimitResetCredits":{"availableCount":2}}
+                   "primary":{"usedPercent":15,"windowDurationMins":300,"resetsAt":1900000000},
+                   "secondary":{"usedPercent":38,"windowDurationMins":10080,"resetsAt":1900100000}}},
+                 "rateLimitResetCredits":{"availableCount":2,"credits":[
+                   {"status":"available","expiresAt":1900200000},
+                   {"status":"available","expiresAt":1900300000}]}}
                 """;
             mini.Accept(new CodexMonitorWireSample(uiNow.ToUnixTimeMilliseconds(), miniRaw));
             var miniFrame = mini.DisplayFrame;
@@ -196,8 +198,11 @@ internal static class Program
                 !miniFrame.EventsAllowed && !miniFrame.TelegramAllowed,
                 "In-app WPF should render all three fresh quota values without trusting account identity.");
             Assert(mini.ToolTip is string freshTip && freshTip.Contains("계정 미확인") &&
-                freshTip.Contains("5H 잔여: 85%") && freshTip.Contains("리셋권: 2"),
-                "Integrated UI must explain source uncertainty and quota details.");
+                freshTip.Contains("Codex 5H: 85%") && freshTip.Contains("Codex 7D: 62%") &&
+                freshTip.Contains("Codex 리셋권: 2") &&
+                freshTip.Contains("1번 만료: ") && freshTip.Contains("2번 만료: ") &&
+                freshTip.Contains("다음 초기화: ") && freshTip.Contains(" KST"),
+                "Integrated UI must show both synthetic credit expiries and quota resets without real account access.");
             Render(mini, Path.Combine(output, "integrated-minibar-fresh.png"));
             mini.Invalidate();
             Assert(mini.DisplayFrame.FiveHourRemaining == null &&
@@ -274,6 +279,19 @@ internal static class Program
                 "The sign-in hint must sit to the right of Add Account within the same row.");
             Assert(All<TextBlock>(window).Count(text => text.Text == "当前") == 1, "Manage identifies the active account.");
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-zh.png"));
+            var telegramPreferences = new NativeSettings().TelegramPreferences;
+            var telegramStatus = All<TextBlock>(window).SingleOrDefault(text =>
+                text.Text.StartsWith("이 기기: ", StringComparison.Ordinal));
+            Assert(telegramStatus is not null &&
+                telegramStatus.Text.Contains(Environment.MachineName, StringComparison.Ordinal) &&
+                telegramStatus.Text.Contains(telegramPreferences.DeviceRole ==
+                    TelegramNotificationDeviceRole.Sender ? "Sender 요청(미승인)" : "Viewer",
+                    StringComparison.Ordinal) &&
+                telegramStatus.Text.Contains(telegramPreferences.NotificationsRequested ?
+                    "ON(요청)" : "OFF", StringComparison.Ordinal) &&
+                telegramStatus.Text.Contains("실제 Telegram 발송: 미연결",
+                    StringComparison.Ordinal),
+                "Isolated WPF settings must display device, role, alert request and disabled delivery.");
             var fiveHour = All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == "显示 5 小时用量");
             fiveHour.IsChecked = true; fiveHour.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
             Assert(client.Commands.Single() == "fiveHour:True", "Settings must save immediately.");

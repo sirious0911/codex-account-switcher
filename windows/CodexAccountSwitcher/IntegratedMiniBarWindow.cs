@@ -160,6 +160,10 @@ internal sealed class IntegratedMiniBarWindow : Window
         fiveValue.Text = Percent(frame.FiveHourRemaining);
         weekValue.Text = Percent(frame.WeeklyRemaining);
         creditValue.Text = frame.ResetCreditsAvailable?.ToString() ?? "—";
+        var hover = TrayQuotaReadout.From(frame);
+        fiveValue.ToolTip = hover.FiveHourTooltip;
+        weekValue.ToolTip = hover.WeeklyTooltip;
+        creditValue.ToolTip = hover.CreditsTooltip;
         var now = DateTimeOffset.UtcNow;
         statusText.Text = frame.Status switch {
             MiniBarDisplayStatus.FreshUnbound => "계정 미확인 · 앱 내부 관측",
@@ -174,9 +178,10 @@ internal sealed class IntegratedMiniBarWindow : Window
             MiniBarDisplayStatus.AgedUnbound => Color.FromRgb(244, 187, 107),
             _ => Color.FromRgb(145, 159, 176)
         });
-        ToolTip = $"5H 잔여: {fiveValue.Text} / 7D 잔여: {weekValue.Text} / 리셋권: {creditValue.Text}\n" +
-                  $"{statusText.Text}\n관측: {frame.ObservedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "확인 불가"}" +
-                  "\n—: 미조회 또는 제공되지 않음";
+        ToolTip = hover.FiveHourTooltip + "\n" + hover.WeeklyTooltip +
+                  "\n" + hover.CreditsTooltip +
+                  "\n관측: " + (frame.ObservedAt?.ToLocalTime()
+                      .ToString("yyyy-MM-dd HH:mm:ss") ?? "확인 불가");
     }
 
     // Preserve a single enumeration snapshot throughout monitor selection.

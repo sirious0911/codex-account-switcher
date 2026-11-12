@@ -46,6 +46,7 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     private bool hovered;
     private bool attaching;
     private bool recreating;
+    private bool started;
     private bool disposed;
 
     internal TaskbarQuotaPanel(Action openAccounts, Action quitApp, Func<bool> canQuit)
@@ -54,17 +55,32 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         this.quitApp = quitApp;
         this.canQuit = canQuit;
         refreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(4) };
-        refreshTimer.Tick += (_, _) => Refresh();
+        refreshTimer.Tick += (_, _) =>
+        {
+            Refresh();
+            // Explorer can start later than this login app. Without a retry,
+            // an initial 20-second attachment timeout hides the quota forever.
+            if (TaskbarAttachRetryPolicy.ShouldRetry(
+                started, disposed, attaching, recreating, host is not null))
+                _ = AttachAsync();
+        };
         refreshTimer.Start();
     }
 
-    internal void Start() => _ = AttachAsync();
+    internal void Start()
+    {
+        if (started || disposed) return;
+        started = true;
+        _ = AttachAsync();
+    }
 
     internal void Accept(CodexMonitorWireSample sample)
     {
         if (disposed) return;
-        state.TryApply(sample, DateTimeOffset.UtcNow);
-        alternateQuota = null;
+        // A rejected or delayed 5H/7D sample must not clear a genuine
+        // Free/30D quota already displayed for the selected profile.
+        if (state.TryApply(sample, DateTimeOffset.UtcNow))
+            alternateQuota = null;
         Refresh();
     }
 
@@ -109,9 +125,27 @@ internal sealed class TaskbarQuotaPanel : IDisposable
             fiveHour.ToolTip = "5H: not provided by this Codex account";
             weekly.ToolTip = alternate.WindowLabel + ": " + alternate.RemainingPercent +
                 "% remaining; observed " + age.TotalSeconds.ToString("F0",
-                CultureInfo.InvariantCulture) + "s ago";
+                CultureInfo.InvariantCulture) + "s ago\n다음 초기화: " +
+                (alternate.ResetsAt > alternate.ObservedAt ?
+                    alternate.ResetsAt.ToOffset(TimeSpan.FromHours(9))
+                        .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " KST" :
+                    "정보 없음");
             credits.ToolTip = "Reset credits: " +
-                (alternate.ResetCreditsRemaining?.ToString(CultureInfo.InvariantCulture) ?? "unknown");
+                (alternate.ResetCreditsRemaining?.ToString(CultureInfo.InvariantCulture) ?? "unknown") +
+                "\n개별 만료일: 제공되지 않음";
+        }
+        else if (alternate is not null)
+        {
+            // The last confirmed plan was non-weekly (e.g. Free 30D), but
+            // its observation expired. Keep the plan label, not the stale
+            // number; do not mislabel this account as a 7D subscription.
+            SetMetric(fiveHour, "5H", "?", light);
+            SetMetric(weekly, alternate.WindowLabel, "?", light);
+            SetMetric(credits, "R", "?", light);
+            fiveHour.ToolTip = "5H: 제공되지 않음";
+            weekly.ToolTip = alternate.WindowLabel +
+                ": UNKNOWN\n관측 만료 · 다음 초기화: 정보 없음";
+            credits.ToolTip = "리셋권: UNKNOWN\n개별 만료일: 정보 없음";
         }
         else
         {
@@ -180,7 +214,14 @@ internal sealed class TaskbarQuotaPanel : IDisposable
             var attached = host!;
             // If Explorer is unavailable, never leave a regular floating window.
             await attached.AttachWhenLayoutReadyAsync().WaitAsync(TimeSpan.FromSeconds(20));
-            if (disposed || !ReferenceEquals(host, attached) || !attached.IsAttached) return;
+            if (disposed || !ReferenceEquals(host, attached)) return;
+            if (!attached.IsAttached)
+            {
+                // An attachment that completed without a valid taskbar host
+                // must be released so the timer can retry after Explorer returns.
+                ReleaseHostedWindow();
+                return;
+            }
             hostedWindow!.Show();
             Refresh();
         }

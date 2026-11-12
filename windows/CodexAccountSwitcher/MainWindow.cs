@@ -570,6 +570,58 @@ public sealed class MainWindow : Window
                 System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(directory) { UseShellExecute = true });
             } catch (Exception ex) { localError = ex.Message; Render(); }
         }));
+        // Local display and notification preferences; no live send is wired.
+        var telegramHeading = Text("Telegram 알림", 14, bold: true);
+        telegramHeading.Margin = new Thickness(0, 20, 0, 0);
+        settings.Children.Add(telegramHeading);
+        var telegram = native.TelegramPreferences;
+        var telegramRoles = new[] { "Viewer — 사용량 표시만", "Sender — 이 PC 발송 담당(예정)" };
+        var telegramRole = new ComboBox {
+            Width = 235, VerticalAlignment = VerticalAlignment.Center,
+            ItemsSource = telegramRoles,
+            SelectedIndex = telegram.DeviceRole == TelegramNotificationDeviceRole.Sender ? 1 : 0
+        };
+        AutomationProperties.SetName(telegramRole, "Telegram PC 역할");
+        telegramRole.SelectionChanged += (_, _) => {
+            if (telegramRole.SelectedIndex >= 0)
+                native.SetTelegramPreferences(native.TelegramPreferences with {
+                    DeviceRole = telegramRole.SelectedIndex == 1
+                        ? TelegramNotificationDeviceRole.Sender
+                        : TelegramNotificationDeviceRole.Viewer
+                });
+        };
+        var telegramRoleRow = Pair(Text("이 PC의 역할"), telegramRole);
+        telegramRoleRow.Height = 48;
+        settings.Children.Add(telegramRoleRow);
+        Toggle("Telegram 알림 ON/OFF (발송 준비 설정)",
+            telegram.NotificationsRequested,
+            requested => native.SetTelegramPreferences(native.TelegramPreferences with {
+                NotificationsRequested = requested
+            }));
+        Toggle("5시간 100% 초기화 → 모니터 봇(묵음)",
+            telegram.FiveHourRequested,
+            requested => native.SetTelegramPreferences(native.TelegramPreferences with {
+                FiveHourRequested = requested
+            }));
+        Toggle("7일 100% 초기화 → 얼럿 봇",
+            telegram.WeeklyRequested,
+            requested => native.SetTelegramPreferences(native.TelegramPreferences with {
+                WeeklyRequested = requested
+            }));
+        var selectedRole = telegram.DeviceRole == TelegramNotificationDeviceRole.Sender
+            ? "Sender 요청(미승인)" : "Viewer";
+        var requestedAlerts = telegram.NotificationsRequested ? "ON(요청)" : "OFF";
+        var telegramState = Text(
+            "이 기기: " + Environment.MachineName +
+            " | 저장된 역할: " + selectedRole +
+            " | 알림 요청: " + requestedAlerts +
+            " | 실제 Telegram 발송: 미연결. " +
+            "역할과 알림 설정은 이 PC에 저장되며 앱 재시작 후에도 유지됩니다. " +
+            "Sender를 선택해도 다른 PC의 Sender가 자동 중지되지 않습니다. " +
+            "단일 발송자 확인·전송 검증 전까지 메시지는 발송되지 않습니다.",
+            10.5, muted: true);
+        telegramState.TextWrapping = TextWrapping.Wrap;
+        settings.Children.Add(telegramState);
         var heading = Text(T("settings_updates"), 14, bold: true); heading.Margin = new Thickness(0, 20, 0, 0); settings.Children.Add(heading);
         Toggle(T("automatically_check_updates"), native.AutomaticallyCheckUpdates, value => native.AutomaticallyCheckUpdates = value);
         var hint = Text(T(native.UpdateError ?? "update_check_hint"), 10.5, muted: true); hint.Margin = new Thickness(0, 0, 0, 12); hint.TextWrapping = TextWrapping.Wrap; settings.Children.Add(hint); settings.Children.Add(Rule());

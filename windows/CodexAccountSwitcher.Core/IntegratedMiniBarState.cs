@@ -9,7 +9,10 @@ public enum MiniBarDisplayStatus { Unknown, FreshUnbound, AgedUnbound, Invalidat
 
 public sealed record MiniBarReadout(
     MiniBarDisplayStatus Status, double? FiveHourRemaining, double? WeeklyRemaining,
-    int? ResetCreditsAvailable, DateTimeOffset? ObservedAt)
+    int? ResetCreditsAvailable, DateTimeOffset? ObservedAt,
+    DateTimeOffset? FiveHourResetsAt = null,
+    DateTimeOffset? WeeklyResetsAt = null,
+    IReadOnlyList<DateTimeOffset?>? CreditExpiresAt = null)
 {
     public bool AccountVerified => false;
     public bool EventsAllowed => false;
@@ -123,6 +126,8 @@ public sealed class IntegratedMiniBarState
             return new(MiniBarDisplayStatus.Unknown, null, null, null, null);
         return new(age < FreshFor ? MiniBarDisplayStatus.FreshUnbound : MiniBarDisplayStatus.AgedUnbound,
             snapshot.FiveHourRemaining, snapshot.WeeklyRemaining,
-            snapshot.CreditsRemaining, observedAt);
+            snapshot.CreditsRemaining, observedAt,
+            snapshot.FiveHourResetsAt, snapshot.WeeklyResetsAt,
+            snapshot.CreditExpiresAt);
     }
 }

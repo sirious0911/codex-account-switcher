@@ -87,7 +87,14 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
                         context.Post(_ => { State = state; Changed?.Invoke(); }, null);
                         break;
                     case "monitorObservation":
-                        if (CodexMonitorWireSample.TryParse(message, out var observation) && observation is not null)
+                        // Validate the complete SwiftHost stdout envelope (including
+                        // decoded duplicate JSON keys) before publishing a sample.
+                        // A schema-rejected monitor inside valid JSON is ignored
+                        // without interrupting snapshot/completed/platform.
+                        // Invalid outer JSON retains the existing transport error path.
+                        var inspected = SwiftHostStrictEnvelopeV1Review.Inspect(line);
+                        if (inspected.Status == "OFFLINE_STRICT_WIRE_CANDIDATE_ONLY" &&
+                            inspected.Sample is { } observation)
                             context.Post(_ => MonitorObserved?.Invoke(observation), null);
                         break;
                     case "completed":

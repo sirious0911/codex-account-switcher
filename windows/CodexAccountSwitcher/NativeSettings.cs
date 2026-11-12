@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Win32;
+using CodexAccountSwitcher.Core;
 
 namespace CodexAccountSwitcher;
 
@@ -24,6 +25,44 @@ public sealed class NativeSettings
         get { using var key = Registry.CurrentUser.OpenSubKey(Key); return key?.GetValue("AutomaticallyCheckUpdates") is not int number || number != 0; }
         set { using var key = Registry.CurrentUser.CreateSubKey(Key); key.SetValue("AutomaticallyCheckUpdates", value ? 1 : 0); }
     }
+    // These four Windows preferences are per-device UI intent only.
+    // The installed application intentionally has no Telegram send transport.
+    public TelegramNotificationPreferences TelegramPreferences
+    {
+        get
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(Key);
+            var role = key?.GetValue("TelegramDeviceRole") is string value &&
+                       string.Equals(value, "sender", StringComparison.Ordinal)
+                ? TelegramNotificationDeviceRole.Sender
+                : TelegramNotificationDeviceRole.Viewer;
+            bool GetFlag(string name, bool fallback) =>
+                key?.GetValue(name) is int v ? v == 1 : fallback;
+            return new TelegramNotificationPreferences(
+                role,
+                GetFlag("TelegramNotificationsRequested", false),
+                GetFlag("TelegramFiveHourRequested", true),
+                GetFlag("TelegramWeeklyRequested", true));
+        }
+    }
+
+    public void SetTelegramPreferences(TelegramNotificationPreferences preferences)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        var selected = preferences.Normalize();
+        using var key = Registry.CurrentUser.CreateSubKey(Key);
+        key.SetValue("TelegramDeviceRole",
+            selected.DeviceRole == TelegramNotificationDeviceRole.Sender
+                ? "sender" : "viewer", RegistryValueKind.String);
+        key.SetValue("TelegramNotificationsRequested",
+            selected.NotificationsRequested ? 1 : 0, RegistryValueKind.DWord);
+        key.SetValue("TelegramFiveHourRequested",
+            selected.FiveHourRequested ? 1 : 0, RegistryValueKind.DWord);
+        key.SetValue("TelegramWeeklyRequested",
+            selected.WeeklyRequested ? 1 : 0, RegistryValueKind.DWord);
+        Changed?.Invoke();
+    }
+
     public Uri? UpdatePage { get; private set; }
     public bool IsChecking { get; private set; }
     public string? UpdateError { get; private set; }

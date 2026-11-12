@@ -17,7 +17,10 @@ public static class MonitorSyntheticPreview
         double? WeeklyRemaining,
         int? CreditsRemaining,
         bool? OrdinaryUsageAllowed,
-        bool HasVerifiedPlan)
+        bool HasVerifiedPlan,
+        DateTimeOffset? FiveHourResetsAt = null,
+        DateTimeOffset? WeeklyResetsAt = null,
+        IReadOnlyList<DateTimeOffset?>? CreditExpiresAt = null)
     {
         public string Display =>
             $"Codex | 5H {Percent(FiveHourRemaining)} | 7D {Percent(WeeklyRemaining)} | Credits {(CreditsRemaining?.ToString() ?? "UNKNOWN")} | MOCK";
@@ -71,11 +74,12 @@ public static class MonitorSyntheticPreview
                 else if (plan.ValueKind != JsonValueKind.Null) return false;
             }
 
-            if (!ReadWindow(codex, "primary", 300, out var five) ||
-                !ReadWindow(codex, "secondary", 10080, out var weekly))
+            if (!ReadWindow(codex, "primary", 300, out var five, out var fiveReset) ||
+                !ReadWindow(codex, "secondary", 10080, out var weekly, out var weeklyReset))
                 return false;
 
             int? credits = null;
+            IReadOnlyList<DateTimeOffset?>? expiries = null;
             if (root.TryGetProperty("rateLimitResetCredits", out var summary))
             {
                 if (summary.ValueKind != JsonValueKind.Object) return false;
@@ -88,18 +92,36 @@ public static class MonitorSyntheticPreview
                     }
                     else if (count.ValueKind != JsonValueKind.Null) return false;
                 }
+                if (summary.TryGetProperty("credits", out var details) &&
+                    details.ValueKind == JsonValueKind.Array)
+                {
+                    var list = new List<DateTimeOffset?>();
+                    foreach (var item in details.EnumerateArray())
+                    {
+                        if (list.Count >= 32) break;
+                        if (item.ValueKind != JsonValueKind.Object ||
+                            !item.TryGetProperty("status", out var status) ||
+                            status.ValueKind != JsonValueKind.String ||
+                            status.GetString() != "available") continue;
+                        list.Add(TryDate(item, "expiresAt"));
+                    }
+                    expiries = list;
+                }
             }
 
-            snapshot = new Snapshot(five, weekly, credits, permission, hasPlan);
+            snapshot = new Snapshot(five, weekly, credits, permission, hasPlan,
+                fiveReset, weeklyReset, expiries);
             return true;
         }
         catch (JsonException) { return false; }
         catch (ArgumentException) { return false; }
     }
 
-    private static bool ReadWindow(JsonElement parent, string name, int duration, out double? remaining)
+    private static bool ReadWindow(JsonElement parent, string name, int duration,
+        out double? remaining, out DateTimeOffset? resetsAt)
     {
         remaining = null;
+        resetsAt = null;
         if (!parent.TryGetProperty(name, out var element) || element.ValueKind == JsonValueKind.Null)
             return true;
         if (element.ValueKind != JsonValueKind.Object) return false;
@@ -107,6 +129,7 @@ public static class MonitorSyntheticPreview
             minutes.ValueKind != JsonValueKind.Number || !minutes.TryGetInt32(out var parsed) ||
             parsed != duration)
             return false;
+        resetsAt = TryDate(element, "resetsAt");
         if (!element.TryGetProperty("usedPercent", out var used))
             return true; // Missing means UNKNOWN.
         if (used.ValueKind == JsonValueKind.Null) return true;
@@ -115,5 +138,15 @@ public static class MonitorSyntheticPreview
             return false;
         remaining = 100 - percent;
         return true;
+    }
+
+    private static DateTimeOffset? TryDate(JsonElement parent, string name)
+    {
+        if (!parent.TryGetProperty(name, out var raw) ||
+            raw.ValueKind != JsonValueKind.Number ||
+            !raw.TryGetInt64(out var seconds) ||
+            seconds <= 0 || seconds > 253402300799L)
+            return null;
+        return DateTimeOffset.FromUnixTimeSeconds(seconds);
     }
 }

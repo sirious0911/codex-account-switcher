@@ -50,6 +50,8 @@ public partial class App : Application
     private AdaptiveUsageRefreshService? adaptiveUsage;
     private CoreClient? client;
     private LocalMonitorWorker? monitorWorker;
+    private Weekly100RecoveryWorker? weekly100Worker;
+    private FiveHour100RecoveryWorker? fiveHour100Worker;
     // Only the confirmed active profile feeds a WPF child HWND embedded
     // before TrayNotifyWnd, immediately to the left of the ^ chevron.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
@@ -86,6 +88,8 @@ public partial class App : Application
                     testEnrollment.SourceDeviceID, syntheticV2Publisher);
             }
             monitorWorker = new LocalMonitorWorker(dataPath);
+            weekly100Worker = new Weekly100RecoveryWorker(dataPath);
+            fiveHour100Worker = new FiveHour100RecoveryWorker(dataPath);
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
@@ -128,20 +132,77 @@ public partial class App : Application
         if (Dispatcher.CheckAccess()) {
             if (sample.ProfileID is Guid id) adaptiveUsage?.ObserveFreshActiveSample(id);
             taskbarPanel?.Accept(sample);
+            ProcessWeekly100Candidate(sample);
+            ProcessFiveHour100Candidate(sample);
         }
         else Dispatcher.BeginInvoke(new Action(() => {
             // Source selection must be rechecked after deferred UI dispatch.
             if (!externalMonitorGate.Allows(sample)) return;
             if (sample.ProfileID is Guid id) adaptiveUsage?.ObserveFreshActiveSample(id);
             taskbarPanel?.Accept(sample);
+            ProcessWeekly100Candidate(sample);
+            ProcessFiveHour100Candidate(sample);
         }));
+    }
+
+    private void ProcessWeekly100Candidate(CodexMonitorWireSample sample)
+    {
+        // Only an already-authorized active profile can enter the local
+        // 7D alert detector. No Telegram transport exists in this method.
+        try {
+            if (client is not null && externalMonitorGate.Allows(sample))
+                weekly100Worker?.Process(sample, client.State,
+                    externalMonitorGate, DateTimeOffset.UtcNow);
+        }
+        catch (Exception ex) {
+            System.Diagnostics.Trace.TraceWarning(
+                "Weekly quota mock alert persistence failed: " + ex.GetType().Name);
+        }
+    }
+
+    private void ProcessFiveHour100Candidate(CodexMonitorWireSample sample)
+    {
+        // A separate local mock ledger for 5H recovery. Never routes or
+        // sends a real Telegram message, irrespective of the bot's mute state.
+        try {
+            if (client is not null && externalMonitorGate.Allows(sample))
+                fiveHour100Worker?.Process(sample, client.State,
+                    externalMonitorGate, DateTimeOffset.UtcNow);
+        }
+        catch (Exception ex) {
+            System.Diagnostics.Trace.TraceWarning(
+                "Five-hour quota mock alert persistence failed: " + ex.GetType().Name);
+        }
+    }
+
+    private void InvalidateFiveHour100(Guid? profileID)
+    {
+        try { fiveHour100Worker?.Invalidate(profileID); }
+        catch (Exception ex) {
+            System.Diagnostics.Trace.TraceWarning(
+                "Five-hour quota mock alert invalidation failed: " + ex.GetType().Name);
+        }
+    }
+
+    private void InvalidateWeekly100(Guid? profileID)
+    {
+        try { weekly100Worker?.Invalidate(profileID); }
+        catch (Exception ex) {
+            System.Diagnostics.Trace.TraceWarning(
+                "Weekly quota mock alert invalidation failed: " + ex.GetType().Name);
+        }
     }
 
     private void OnClientChanged()
     {
         if (client is null) return;
         var state = client.State;
-        if (externalMonitorGate.Observe(state)) taskbarPanel?.Invalidate();
+        var previouslyActive = externalMonitorGate.ActiveProfile;
+        if (externalMonitorGate.Observe(state)) {
+            taskbarPanel?.Invalidate();
+            InvalidateWeekly100(previouslyActive);
+            InvalidateFiveHour100(previouslyActive);
+        }
         // On a Free/partial plan there can be no weekly quota observation.
         // Accept only a confirmed active profile's *actual*, newly received
         // non-weekly quota. Do not borrow the old profile's 5H/7D metrics.
@@ -165,7 +226,10 @@ public partial class App : Application
 
     private void OnSwitchRequested()
     {
+        var previouslyActive = externalMonitorGate.ActiveProfile;
         externalMonitorGate.SwitchRequested();
+        InvalidateWeekly100(previouslyActive);
+        InvalidateFiveHour100(previouslyActive);
         if (Dispatcher.CheckAccess()) taskbarPanel?.Invalidate();
         else Dispatcher.BeginInvoke(new Action(() => taskbarPanel?.Invalidate()));
     }

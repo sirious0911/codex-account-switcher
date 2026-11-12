@@ -15,6 +15,23 @@ public sealed class NativeSettings
     private const string Key = @"Software\Sirious0911\CodexAccountSwitcher";
     private const string Run = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public string Version => typeof(NativeSettings).Assembly.GetName().Version!.ToString(3);
+
+    // The actual running executable distinguishes same-version personal RC builds.
+    // Hash only this process image, never auth.json, profiles or user settings.
+    private static readonly Lazy<string?> RunningExecutableHash = new(() => {
+        try {
+            var path = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(path)) return null;
+            using var input = System.IO.File.OpenRead(path);
+            return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(input))
+                .ToLowerInvariant();
+        } catch (Exception error) when (error is System.IO.IOException or
+            UnauthorizedAccessException or System.Security.SecurityException) {
+            return null;
+        }
+    });
+
+    public string? RunningExecutableSha256 => RunningExecutableHash.Value;
     public bool LaunchAtLogin {
         get { using var key = Registry.CurrentUser.OpenSubKey(Run); return key?.GetValue("CodexAccountSwitcherPersonal") is string; }
         set { using var key = Registry.CurrentUser.CreateSubKey(Run);

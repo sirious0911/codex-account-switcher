@@ -279,6 +279,23 @@ internal static class Program
                 "The sign-in hint must sit to the right of Add Account within the same row.");
             Assert(All<TextBlock>(window).Count(text => text.Text == "当前") == 1, "Manage identifies the active account.");
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-zh.png"));
+            var runningSha = new NativeSettings().RunningExecutableSha256;
+            Assert(runningSha is { Length: 64 } &&
+                runningSha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'),
+                "Settings must distinguish running EXE builds with a SHA256 identifier.");
+            using (var input = File.OpenRead(Environment.ProcessPath!)) {
+                var expected = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(input)).ToLowerInvariant();
+                Assert(runningSha == expected,
+                    "Build fingerprint must hash the running executable, not user credentials.");
+            }
+            Assert(All<TextBlock>(window).Any(text =>
+                    text.Text == "실행 빌드: SHA256 " + runningSha![..16] &&
+                    text.ToolTip is string tip && tip.Contains(runningSha, StringComparison.Ordinal)),
+                "Settings must show the actual running EXE identifier and full hash on hover.");
+            Assert(All<Button>(window).Any(button =>
+                    System.Windows.Automation.AutomationProperties.GetName(button) == "빌드 SHA256 복사"),
+                "Settings must offer copying the full executable SHA256.");
             var telegramPreferences = new NativeSettings().TelegramPreferences;
             var telegramStatus = All<TextBlock>(window).SingleOrDefault(text =>
                 text.Text.StartsWith("이 기기: ", StringComparison.Ordinal));

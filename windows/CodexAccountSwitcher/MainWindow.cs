@@ -626,6 +626,26 @@ public sealed class MainWindow : Window
         Toggle(T("automatically_check_updates"), native.AutomaticallyCheckUpdates, value => native.AutomaticallyCheckUpdates = value);
         var hint = Text(T(native.UpdateError ?? "update_check_hint"), 10.5, muted: true); hint.Margin = new Thickness(0, 0, 0, 12); hint.TextWrapping = TextWrapping.Wrap; settings.Children.Add(hint); settings.Children.Add(Rule());
         var check = Button(T(native.UpdatePage == null ? "check_for_updates" : "update_action"), async () => { if (native.UpdatePage != null) native.OpenUpdate(); else await native.CheckUpdatesAsync(); }); check.IsEnabled = !native.IsChecking;
-        var version = Pair(Text(T("current_version").Replace("%@", native.Version), 12), check); version.Margin = new Thickness(0, 12, 0, 0); settings.Children.Add(version); body.Children.Add(settings);
+        var version = Pair(Text(T("current_version").Replace("%@", native.Version), 12), check);
+        version.Margin = new Thickness(0, 12, 0, 0);
+        settings.Children.Add(version);
+        // The semantic version is the same on earlier personal RCs. Show the
+        // hash of the *running executable* so users can identify the exact build.
+        var runningSha = native.RunningExecutableSha256;
+        var buildID = Text(runningSha is { Length: 64 }
+            ? "실행 빌드: SHA256 " + runningSha[..16]
+            : "실행 빌드: 확인 불가", 10.5, muted: true);
+        buildID.Margin = new Thickness(0, 8, 0, 0);
+        buildID.ToolTip = runningSha is null ? "실행 파일 해시를 읽을 수 없습니다."
+            : "현재 실행 EXE SHA256:" + Environment.NewLine + runningSha;
+        settings.Children.Add(buildID);
+        if (runningSha is not null) {
+            var copyBuildID = Button("빌드 SHA256 복사", () => {
+                try { Clipboard.SetText(runningSha); }
+                catch (Exception ex) { localError = ex.Message; Render(); }
+            });
+            settings.Children.Add(copyBuildID);
+        }
+        body.Children.Add(settings);
     }
 }

@@ -373,20 +373,80 @@ internal static class Program
             client.State = client.State with { IsMutating = false };
             window.CloseForExit();
             Assert(closed, "Explicit application exit must release the window.");
-            VerifyMonitorPage(output);
+            VerifyMonitorPage(output, VerifyOfflineRecoveryInbox(output));
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
-    private static void VerifyMonitorPage(string output)
+    private static OfflineTelegramInboxSnapshot VerifyOfflineRecoveryInbox(string output)
+    {
+        var directory = Path.Combine(output, "telegram-recovery-inbox-fixture");
+        Assert(!Directory.Exists(directory), "Inbox fixture must start absent.");
+        var missing = OfflineTelegramRecoveryInbox.Read(directory);
+        Assert(missing.Rows.Count == 0 && !missing.LedgerReadError &&
+            !Directory.Exists(directory),
+            "Reading an absent inbox must never create directories or ledger files.");
+        var now = DateTimeOffset.UtcNow;
+        var firstKey = new string('a', 64);
+        var collisionKey = new string('a', 63) + "b"; // same displayed eight chars
+        var weeklyKey = new string('b', 64);
+        var five = new FiveHour100Alert(firstKey, "FIVE_HOUR_100_RECOVERED",
+            "fiveHour", 100, now.AddMinutes(-2), now.AddHours(5), "MOCK_PENDING");
+        var collision = five with { Key = collisionKey,
+            ObservedAt = now.AddMinutes(-1), Status = "MOCK_UNCERTAIN" };
+        var week = new Weekly100Alert(weeklyKey, "WEEKLY_100_RECOVERED",
+            "week", 100, now, now.AddDays(7), "MOCK_RESERVED");
+        var projection = OfflineTelegramRecoveryInbox.Project(
+            [five, collision, five with { ObservedAt = now.AddMinutes(-3) },
+                five with { Kind = "WRONG_KIND" }],
+            [week, week with { Key = "not-hex" }]);
+        Assert(projection.Rows.Count == 3 &&
+            projection.Rows[0].Lane == "7D" &&
+            projection.Rows[0].Destination == "얼럿 봇" &&
+            projection.Rows[1].Lane == "5H" &&
+            projection.Rows[1].StatusLabel == "모의 결과 불확실" &&
+            projection.Rows[2].StatusLabel == "모의 대기",
+            "Offline inbox must route both lanes, dedupe by full key, order and label mock statuses.");
+        Assert(projection.Rows[1].EventReference == projection.Rows[2].EventReference,
+            "Two events sharing only a short hash prefix must not be dropped.");
+        var fiveDir = Path.Combine(directory, "usage-monitor-fivehour100");
+        var weekDir = Path.Combine(directory, "usage-monitor-weekly100");
+        Directory.CreateDirectory(fiveDir);
+        Directory.CreateDirectory(weekDir);
+        var fivePath = Path.Combine(fiveDir, "state.json");
+        var weekPath = Path.Combine(weekDir, "state.json");
+        File.WriteAllText(fivePath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new FiveHour100DurableState { Outbox = [five, collision] }));
+        File.WriteAllText(weekPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new Weekly100DurableState { Outbox = [week] }));
+        var onDisk = OfflineTelegramRecoveryInbox.Read(directory);
+        Assert(onDisk.Rows.Count == 3 && !onDisk.LedgerReadError,
+            "Real on-disk detector ledger schemas must be readable without a sender.");
+        File.WriteAllText(weekPath, "{invalid-json");
+        var corrupt = OfflineTelegramRecoveryInbox.Read(directory);
+        Assert(corrupt.LedgerReadError && corrupt.Rows.Count == 2 &&
+            corrupt.Rows.All(row => row.Lane == "5H"),
+            "A corrupt 7D ledger must report an error while keeping valid 5H rows.");
+        File.WriteAllText(weekPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new Weekly100DurableState { SchemaVersion = 999, Outbox = [week] }));
+        Assert(OfflineTelegramRecoveryInbox.Read(directory).LedgerReadError,
+            "Unknown ledger schema must not be reported as a valid event.");
+        return projection;
+    }
+
+    private static void VerifyMonitorPage(string output, OfflineTelegramInboxSnapshot inbox)
     {
         var client = new FixtureClient();
         var history = new LocalMonitorHistoryRow(
             "a1b2c3d4", "CREDIT_INCREASE", "credits",
             DateTimeOffset.FromUnixTimeSeconds(1_800_000_000),
             1, 2, true);
-        var window = new MainWindow(client, monitorHistory: () => new[] { history });
+        var window = new MainWindow(client, monitorHistory: () => new[] { history },
+            telegramRecoveryInbox: () => inbox);
         Render(window, Path.Combine(output, "monitor-account-list-zh.png"));
         var commandsBefore = client.Commands.Count;
         var untouched = client.State;
@@ -397,6 +457,17 @@ internal static class Program
             "Opening the monitor must not issue a change or sign-in command.");
         Render(window, Path.Combine(output, "monitor-zh.png"));
         var texts = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(texts.Contains("Telegram 복구 알림 대기함 (오프라인)") &&
+            texts.Any(text => text.Contains("실제 발송") &&
+                text.Contains("아닙니다")) &&
+            texts.Any(text => text.Contains("5H → 모니터 봇(묵음)") &&
+                text.Contains("모의 대기")) &&
+            texts.Any(text => text.Contains("7D → 얼럿 봇") &&
+                text.Contains("모의 예약")),
+            "Monitor must connect real recovery ledger projections to a no-send 5H/7D inbox.");
+        Assert(All<TextBlock>(window).Any(text => text.ToolTip is string tip &&
+                tip.Contains("실제 Telegram 발송/수신 증거 없음")),
+            "No offline recovery event may be presented as a Telegram delivery receipt.");
         Assert(texts.Contains("원격 기기 사용량 (P3)") &&
                texts.Any(text => text.Contains("Mac 5H: ?") &&
                                  text.Contains("Mac 7D: ?") &&

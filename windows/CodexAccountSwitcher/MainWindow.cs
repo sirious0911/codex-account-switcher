@@ -19,6 +19,7 @@ public sealed class MainWindow : Window
     private readonly IAccountClient client;
     private readonly NativeSettings native;
     private readonly Func<IReadOnlyList<LocalMonitorHistoryRow>> history;
+    private readonly Func<OfflineTelegramInboxSnapshot> recoveryInbox;
     private string page = "accounts";
     private AccountRow? target;
     private string? localError;
@@ -43,10 +44,12 @@ public sealed class MainWindow : Window
     private Brush B(string key) => (Brush)FindResource(key);
 
     public MainWindow(IAccountClient client, NativeSettings? native = null,
-        Func<IReadOnlyList<LocalMonitorHistoryRow>>? monitorHistory = null)
+        Func<IReadOnlyList<LocalMonitorHistoryRow>>? monitorHistory = null,
+        Func<OfflineTelegramInboxSnapshot>? telegramRecoveryInbox = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
+        recoveryInbox = telegramRecoveryInbox ?? (() => OfflineTelegramInboxSnapshot.Empty);
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -305,6 +308,32 @@ public sealed class MainWindow : Window
             credits.Margin = new Thickness(0, 4, 0, 0);
             section.Children.Add(credits);
             content.Children.Add(section);
+        }
+        // Existing 5H/7D detector ledgers now have a user-visible, strictly
+        // offline review surface. No reservation or Telegram send occurs.
+        var recoveryHeading = Text("Telegram 복구 알림 대기함 (오프라인)", 13, bold: true);
+        recoveryHeading.Margin = new Thickness(0, 12, 0, 6);
+        content.Children.Add(recoveryHeading);
+        var recoveryNote = Text(
+            "5H → 모니터 봇(묵음) / 7D → 얼럿 봇. 모든 상태는 모의 기록이며 " +
+            "Telegram 실제 발송·수신 확인이 아닙니다.", 10.5, muted: true);
+        recoveryNote.TextWrapping = TextWrapping.Wrap;
+        content.Children.Add(recoveryNote);
+        var inbox = recoveryInbox();
+        if (inbox.LedgerReadError)
+            content.Children.Add(Text("일부 로컬 복구 원장을 읽을 수 없습니다.", 10.5, muted: true));
+        if (inbox.Rows.Count == 0)
+            content.Children.Add(Text("기록된 5H·7D 복구 알림 없음", 10.5, muted: true));
+        foreach (var entry in inbox.Rows)
+        {
+            var line = Text(entry.Lane + " → " + entry.Destination + " · " +
+                entry.ObservedAt.ToOffset(TimeSpan.FromHours(9))
+                    .ToString("MM-dd HH:mm", CultureInfo.InvariantCulture) + " KST · " +
+                entry.StatusLabel, 10.5, muted: true);
+            line.ToolTip = "로컬 모의 이벤트 " + entry.EventReference +
+                " · 실제 Telegram 발송/수신 증거 없음";
+            line.Margin = new Thickness(0, 3, 0, 0);
+            content.Children.Add(line);
         }
         var historyHeading = Text(T("monitor_history"), 13, bold: true);
         historyHeading.Margin = new Thickness(0, 12, 0, 8);

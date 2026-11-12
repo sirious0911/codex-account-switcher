@@ -93,7 +93,8 @@ public partial class App : Application
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
-            window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? []); MainWindow = window;
+            window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? [],
+                () => OfflineTelegramRecoveryInbox.Read(dataPath)); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);

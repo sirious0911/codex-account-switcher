@@ -51,6 +51,8 @@ internal static class Program
                 TaskbarQuotaPanel.PreferredHeight == 48 &&
                 TaskbarQuotaPanel.IndicatorHeight == 30,
                 "The hosted HWND must span the taskbar row while the smaller quota strip stays vertically centered, immediately LEFT of ^.");
+            Assert(appFields.Any(f => f.FieldType == typeof(WindowsTelegramLocalSenderLease)),
+                "Windows app must own the session-local Telegram mutex lifecycle.");
             Assert(appFields.Any(f => f.FieldType == typeof(AdaptiveUsageRefreshService)),
                 "Adaptive work polling must be owned by the same Windows app, not a second process.");
             // Metadata-only recent-session detection: never inspect login or transcript bytes.
@@ -216,7 +218,8 @@ internal static class Program
             Assert(mini.IsVisible, "Existing tray can reopen the same minibar window.");
             mini.CloseForExit();
 
-            var window = new MainWindow(client);
+            var window = new MainWindow(client, telegramLocalSenderStatus: () =>
+                "Windows local sender: test-only, actual delivery blocked");
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)
             using (var trayIcon = new System.Drawing.Icon(stream, 16, 16))
@@ -279,6 +282,9 @@ internal static class Program
                 "The sign-in hint must sit to the right of Add Account within the same row.");
             Assert(All<TextBlock>(window).Count(text => text.Text == "当前") == 1, "Manage identifies the active account.");
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-zh.png"));
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "Windows local sender: test-only, actual delivery blocked"),
+                "Settings must show local sender status but never grant delivery.");
             var runningSha = new NativeSettings().RunningExecutableSha256;
             Assert(runningSha is { Length: 64 } &&
                 runningSha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'),
@@ -373,6 +379,7 @@ internal static class Program
             client.State = client.State with { IsMutating = false };
             window.CloseForExit();
             Assert(closed, "Explicit application exit must release the window.");
+            WindowsLocalSenderLeaseTest.Run(output);
             VerifyMonitorPage(output, VerifyOfflineRecoveryInbox(output));
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);

@@ -52,6 +52,8 @@ public partial class App : Application
     private LocalMonitorWorker? monitorWorker;
     private Weekly100RecoveryWorker? weekly100Worker;
     private FiveHour100RecoveryWorker? fiveHour100Worker;
+    private WindowsTelegramLocalSenderLease? localTelegramSender;
+    private NativeSettings? nativeSettings;
     // Only the confirmed active profile feeds a WPF child HWND embedded
     // before TrayNotifyWnd, immediately to the left of the ^ chevron.
     private readonly ActiveMonitorPublicationGate externalMonitorGate = new();
@@ -93,8 +95,21 @@ public partial class App : Application
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
+            nativeSettings = native;
+            try {
+                localTelegramSender = new WindowsTelegramLocalSenderLease(dataPath);
+                RefreshLocalTelegramSender();
+                native.Changed += RefreshLocalTelegramSender;
+            } catch (Exception leaseError) when (leaseError is UnauthorizedAccessException
+                or IOException or WaitHandleCannotBeOpenedException) {
+                // Sender is optional; failure must not prevent account switching.
+                // A missing local lease is never a send permit.
+                System.Diagnostics.Trace.TraceWarning(
+                    "Local Telegram sender lease unavailable: " + leaseError.GetType().Name);
+            }
             window = new MainWindow(client, native, () => monitorWorker?.ReadHistory() ?? [],
-                () => OfflineTelegramRecoveryInbox.Read(dataPath)); MainWindow = window;
+                () => OfflineTelegramRecoveryInbox.Read(dataPath),
+                () => localTelegramSender?.Display ?? "Windows 로컬 Sender: 확인 불가 · 실제 발송 차단"); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -117,6 +132,18 @@ public partial class App : Application
             MessageBox.Show(ex.Message, "Codex Account Switcher Personal", MessageBoxButton.OK, MessageBoxImage.Error);
             await QuitAsync();
         }
+    }
+
+    private void RefreshLocalTelegramSender()
+    {
+        if (exiting || nativeSettings is null || localTelegramSender is null)
+            return;
+        if (!Dispatcher.CheckAccess()) {
+            Dispatcher.BeginInvoke(new Action(RefreshLocalTelegramSender));
+            return;
+        }
+        // Local session mutex only. No credential read or sender transport.
+        localTelegramSender.Update(nativeSettings.TelegramPreferences);
     }
 
     private void OnMonitorObserved(CodexMonitorWireSample sample)
@@ -301,6 +328,9 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e) {
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         taskbarPanel?.Dispose();
+        if (nativeSettings is not null)
+            nativeSettings.Changed -= RefreshLocalTelegramSender;
+        localTelegramSender?.Dispose();
         syntheticV2Runtime?.Dispose();
         syntheticV2Publisher?.Dispose();
         adaptiveUsage?.Dispose();

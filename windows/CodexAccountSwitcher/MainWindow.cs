@@ -20,6 +20,7 @@ public sealed class MainWindow : Window
     private readonly NativeSettings native;
     private readonly Func<IReadOnlyList<LocalMonitorHistoryRow>> history;
     private readonly Func<OfflineTelegramInboxSnapshot> recoveryInbox;
+    private readonly Func<string> localTelegramSenderStatus;
     private string page = "accounts";
     private AccountRow? target;
     private string? localError;
@@ -45,11 +46,14 @@ public sealed class MainWindow : Window
 
     public MainWindow(IAccountClient client, NativeSettings? native = null,
         Func<IReadOnlyList<LocalMonitorHistoryRow>>? monitorHistory = null,
-        Func<OfflineTelegramInboxSnapshot>? telegramRecoveryInbox = null)
+        Func<OfflineTelegramInboxSnapshot>? telegramRecoveryInbox = null,
+        Func<string>? telegramLocalSenderStatus = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
         recoveryInbox = telegramRecoveryInbox ?? (() => OfflineTelegramInboxSnapshot.Empty);
+        localTelegramSenderStatus = telegramLocalSenderStatus ??
+            (() => "Windows 로컬 Sender: 검증하지 않음 · 실제 발송 차단");
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -652,6 +656,9 @@ public sealed class MainWindow : Window
             10.5, muted: true);
         telegramState.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(telegramState);
+        var localSenderStatus = Text(localTelegramSenderStatus(), 10.5, muted: true);
+        localSenderStatus.TextWrapping = TextWrapping.Wrap;
+        settings.Children.Add(localSenderStatus);
         var botFileCheck = Button("기존 Telegram 봇 파일 확인 (읽기 전용)", () => {
             using var picker = new System.Windows.Forms.FolderBrowserDialog {
                 Description = "기존 Telegram 봇 설정 파일이 있는 폴더를 선택하세요.",

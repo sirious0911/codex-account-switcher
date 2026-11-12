@@ -80,6 +80,66 @@ public sealed class NativeSettings
         Changed?.Invoke();
     }
 
+    // Local folder pointer only; credentials, DPAPI token bytes and chat IDs
+    // are never read into this setting. A UI picker is the only normal writer.
+    public string? TelegramBotDirectory
+    {
+        get
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(Key);
+            var stored = key?.GetValue("TelegramBotDirectory") as string;
+            return NormalizeTelegramBotDirectory(stored);
+        }
+    }
+
+    public void SetTelegramBotDirectory(string? selectedDirectory)
+    {
+        var normalized = string.IsNullOrWhiteSpace(selectedDirectory)
+            ? null : NormalizeTelegramBotDirectory(selectedDirectory);
+        if (selectedDirectory is not null && normalized is null)
+            throw new ArgumentException("Select an existing local fixed-drive folder.",
+                nameof(selectedDirectory));
+        using var key = Registry.CurrentUser.CreateSubKey(Key);
+        if (normalized is null)
+            key.DeleteValue("TelegramBotDirectory", false);
+        else
+            key.SetValue("TelegramBotDirectory", normalized,
+                RegistryValueKind.String);
+        Changed?.Invoke();
+    }
+
+    // Never allow UNC/remote shares, drive roots, or reparse points for bot
+    // secrets. This is a metadata precheck, not a proof of safe send authority.
+    public static string? NormalizeTelegramBotDirectory(string? requested)
+    {
+        if (string.IsNullOrWhiteSpace(requested) ||
+            !System.IO.Path.IsPathFullyQualified(requested) ||
+            requested.StartsWith(@"\\", StringComparison.Ordinal))
+            return null;
+        try {
+            var full = System.IO.Path.TrimEndingDirectorySeparator(
+                System.IO.Path.GetFullPath(requested));
+            var root = System.IO.Path.GetPathRoot(full);
+            if (root is null ||
+                string.Equals(root, full, StringComparison.OrdinalIgnoreCase) ||
+                new System.IO.DriveInfo(root).DriveType != System.IO.DriveType.Fixed)
+                return null;
+            var directory = new System.IO.DirectoryInfo(full);
+            if (!directory.Exists) return null;
+            for (var ancestor = directory; ancestor is not null;
+                ancestor = ancestor.Parent)
+            {
+                if (ancestor.Attributes.HasFlag(System.IO.FileAttributes.ReparsePoint))
+                    return null;
+            }
+            return full;
+        } catch (Exception ex) when (ex is System.IO.IOException or
+            UnauthorizedAccessException or ArgumentException or
+            NotSupportedException or System.Security.SecurityException) {
+            return null;
+        }
+    }
+
     public Uri? UpdatePage { get; private set; }
     public bool IsChecking { get; private set; }
     public string? UpdateError { get; private set; }

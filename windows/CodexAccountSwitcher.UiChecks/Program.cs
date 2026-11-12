@@ -305,11 +305,24 @@ internal static class Program
                 "Settings must offer copying the full executable SHA256.");
             var existingBot = All<Button>(window).SingleOrDefault(button =>
                 System.Windows.Automation.AutomationProperties.GetName(button) ==
-                    "기존 Telegram 봇 파일 확인 (읽기 전용)");
+                    "기존 Telegram 봇 폴더 선택·저장 (읽기 전용 확인)");
             Assert(existingBot is not null,
-                "Settings must provide an explicit metadata-only bot-folder check.");
+                "Settings must let the user persist the bot folder selection.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text.StartsWith("기존 Telegram 봇 폴더:", StringComparison.Ordinal)),
+                "Settings must show stored/unset bot directory status without raw tokens.");
             var botFixture = Path.Combine(output, "telegram-bot-file-metadata-only");
             Directory.CreateDirectory(botFixture);
+            Assert(NativeSettings.NormalizeTelegramBotDirectory(botFixture) ==
+                    Path.GetFullPath(botFixture).TrimEnd(Path.DirectorySeparatorChar),
+                "Existing local fixed-drive bot folder should normalize exactly.");
+            Assert(NativeSettings.NormalizeTelegramBotDirectory(
+                    Path.Combine(botFixture, "missing")) is null &&
+                NativeSettings.NormalizeTelegramBotDirectory(
+                    Path.GetPathRoot(botFixture)) is null &&
+                NativeSettings.NormalizeTelegramBotDirectory(
+                    @"\\remote-host\share\bot") is null,
+                "Missing directories, drive roots, and UNC shares must never be saved.");
             var missingBot = TelegramBotFileStatus.Inspect(botFixture);
             Assert(!missingBot.MonitorBotFilesPresent && !missingBot.AlertBotFilesPresent &&
                 !missingBot.ChatDestinationPresent,

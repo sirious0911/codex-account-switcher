@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   FUTURE, NOT INSTALLED, NOT INVOKED.
   Dedicated 5H receipt script that reuses the existing muted Amano health bot

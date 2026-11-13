@@ -38,8 +38,8 @@ try {
     # Ship reviewed, NON-SECRET sender scripts in the existing single-EXE
     # SwiftRuntime.zip payload. Never bundle bot credentials or chat IDs.
     $telegramScripts = @(
-        @{ Name='send-fivehour100-existing-monitor-bot.ps1'; Hash='9370aa1a4194e65d10c999c8d75ec48fc62ff34a9ba4ee0aae7991d6d13d0920' },
-        @{ Name='send-weekly100-existing-alert-bot.ps1'; Hash='449b2fd6ec108a08a86e7a291f400fb99e6d3f6764163e5d5e5f7a6adcec07b2' }
+        @{ Name='send-fivehour100-existing-monitor-bot.ps1'; Hash='951eee1062a74df31492ccca3188f2d6d73c811f50fcd8389689102e50df9dd4' },
+        @{ Name='send-weekly100-existing-alert-bot.ps1'; Hash='41c391f9279c9a1672ed63085cddc716863c1d0713cd8048f04615154281296c' }
     )
     foreach ($script in $telegramScripts) {
         $source = Join-Path (Join-Path $windowsRoot 'scripts') $script.Name

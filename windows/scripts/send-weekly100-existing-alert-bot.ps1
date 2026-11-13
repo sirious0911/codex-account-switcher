@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
   FUTURE, NOT INSTALLED, NOT INVOKED.
   Dedicated receipt-producing script that reuses the existing Amano bot

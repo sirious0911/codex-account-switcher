@@ -30,7 +30,17 @@ internal static class TelegramSenderScriptContractTest
     {
         Assert(File.Exists(filePath), "Missing proposed Telegram sender source: " +
             Path.GetFileName(filePath));
-        var script = File.ReadAllText(filePath);
+        var sourceBytes = File.ReadAllBytes(filePath);
+        Assert(sourceBytes.Length >= 3 &&
+            sourceBytes[0] == 0xEF && sourceBytes[1] == 0xBB &&
+            sourceBytes[2] == 0xBF,
+            "Windows PowerShell 5.1 must load Korean script literals from UTF-8 BOM.");
+        // A Windows PS 5.1 script without BOM is read using the OS ANSI
+        // codepage. It can silently corrupt the Korean message-regex gate.
+        var script = new System.Text.UTF8Encoding(false, true)
+            .GetString(sourceBytes.AsSpan(3));
+        Assert(script.Contains(messageHeading, StringComparison.Ordinal),
+            "UTF-8 sender text must retain the expected Korean alert heading.");
         var approval = script.IndexOf(
             "if (-not $ApprovedSingleSend -or -not $WindowsSenderVerified)",
             StringComparison.Ordinal);

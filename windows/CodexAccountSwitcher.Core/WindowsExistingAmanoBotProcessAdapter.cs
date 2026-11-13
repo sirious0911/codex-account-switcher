@@ -49,7 +49,7 @@ internal sealed class WindowsExistingAmanoBotProcessAdapter
         return new(WindowsAmanoDeliveryStatus.Acknowledged, messageId);
     }
 
-    private static bool ValidRoute(WindowsExistingAmanoBotInvocation route)
+    internal static bool ValidRoute(WindowsExistingAmanoBotInvocation route)
     {
         if (route.EventKey is not { Length: 64 } ||
             !route.EventKey.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f') ||

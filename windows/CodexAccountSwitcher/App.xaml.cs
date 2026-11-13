@@ -52,6 +52,7 @@ public partial class App : Application
     private LocalMonitorWorker? monitorWorker;
     private Weekly100RecoveryWorker? weekly100Worker;
     private FiveHour100RecoveryWorker? fiveHour100Worker;
+    private WindowsAmanoProductionOutbox? telegramOutbox;
     private WindowsTelegramLocalSenderLease? localTelegramSender;
     private NativeSettings? nativeSettings;
     private string? bundledTelegramHostPath;
@@ -98,6 +99,7 @@ public partial class App : Application
             monitorWorker = new LocalMonitorWorker(dataPath);
             weekly100Worker = new Weekly100RecoveryWorker(dataPath);
             fiveHour100Worker = new FiveHour100RecoveryWorker(dataPath);
+            telegramOutbox = new WindowsAmanoProductionOutbox(dataPath);
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
@@ -117,7 +119,9 @@ public partial class App : Application
                 () => OfflineTelegramRecoveryInbox.Read(dataPath),
                 () => localTelegramSender?.Display ?? "Windows 로컬 Sender: 확인 불가 · 실제 발송 차단",
                 () => bundledBotScripts.Display,
-                () => existingAmanoBotRouteStatus); MainWindow = window;
+                () => existingAmanoBotRouteStatus,
+                () => telegramOutbox?.ReadDisplay() ??
+                    "운영 알림 대기함: 확인 불가 · 실제 발송 차단"); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -241,6 +245,24 @@ public partial class App : Application
         existingAmanoBotRouteStatus = prefix +
             (route is null ? ": 봇 폴더/스크립트 미확인" : ": 전송 경로 준비됨") +
             " · 실제 발송 차단";
+        // Only persist confirmed, prepared events. This ledger is separate
+        // from the MOCK workers. No send, authorization, DPAPI or network.
+        if (route is not null)
+        {
+            try {
+                telegramOutbox?.Stage(lane, eventKey, observedAt,
+                    matchingPreparedRoute: true, preferences);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                or InvalidDataException or System.Text.Json.JsonException) {
+                // A damaged/locked queue must not block account switching,
+                // and MUST NOT fall back to an unrecorded Telegram send.
+                existingAmanoBotRouteStatus = prefix +
+                    ": 운영 발송 원장 오류 · 실제 발송 차단";
+                System.Diagnostics.Trace.TraceWarning(
+                    "Telegram production outbox unavailable: " + ex.GetType().Name);
+            }
+        }
         // No invocation, approval flags, DPAPI reads, or Telegram network.
     }
 

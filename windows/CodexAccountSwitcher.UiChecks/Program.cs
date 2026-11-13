@@ -41,6 +41,8 @@ internal static class Program
             WindowsPackagedTelegramScriptsTest.Run(output);
             WindowsExistingAmanoBotRouteTest.Run(output);
             WindowsExistingAmanoProcessAdapterTest.Run(output);
+            WindowsAmanoProductionOutboxTest.Run(output);
+            WindowsAmanoApprovedDeliveryCoordinatorTest.Run(output);
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
@@ -58,6 +60,8 @@ internal static class Program
                 "The hosted HWND must span the taskbar row while the smaller quota strip stays vertically centered, immediately LEFT of ^.");
             Assert(appFields.Any(f => f.FieldType == typeof(WindowsTelegramLocalSenderLease)),
                 "Windows app must own the session-local Telegram mutex lifecycle.");
+            Assert(appFields.Any(f => f.FieldType == typeof(WindowsAmanoProductionOutbox)),
+                "Windows app must own the durable Telegram approval queue.");
             Assert(appFields.Any(f => f.FieldType == typeof(AdaptiveUsageRefreshService)),
                 "Adaptive work polling must be owned by the same Windows app, not a second process.");
             // Metadata-only recent-session detection: never inspect login or transcript bytes.
@@ -229,7 +233,9 @@ internal static class Program
                 packagedTelegramScriptsStatus: () =>
                     "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단",
                 existingAmanoBotStatus: () =>
-                    "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단");
+                    "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단",
+                productionTelegramOutboxStatus: () =>
+                    "운영 알림 대기함: 승인 대기 2건 · 실제 발송 별도 승인");
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)
             using (var trayIcon = new System.Drawing.Icon(stream, 16, 16))
@@ -301,6 +307,9 @@ internal static class Program
             Assert(All<TextBlock>(window).Any(text =>
                 text.Text == "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단"),
                 "Settings must identify reuse of the existing Amano bot, without sending.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "운영 알림 대기함: 승인 대기 2건 · 실제 발송 별도 승인"),
+                "Settings must expose persistent production approval queue status.");
             var runningSha = new NativeSettings().RunningExecutableSha256;
             Assert(runningSha is { Length: 64 } &&
                 runningSha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'),
@@ -482,7 +491,9 @@ internal static class Program
             DateTimeOffset.FromUnixTimeSeconds(1_800_000_000),
             1, 2, true);
         var window = new MainWindow(client, monitorHistory: () => new[] { history },
-            telegramRecoveryInbox: () => inbox);
+            telegramRecoveryInbox: () => inbox,
+            productionTelegramOutboxStatus: () =>
+                "운영 알림 대기함: 승인 대기 2건 · 실제 발송 별도 승인");
         Render(window, Path.Combine(output, "monitor-account-list-zh.png"));
         var commandsBefore = client.Commands.Count;
         var untouched = client.State;
@@ -493,6 +504,9 @@ internal static class Program
             "Opening the monitor must not issue a change or sign-in command.");
         Render(window, Path.Combine(output, "monitor-zh.png"));
         var texts = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(texts.Contains("Telegram 운영 알림 (승인 전 발송 없음)") &&
+            texts.Any(text => text.Contains("운영 알림 대기함: 승인 대기 2건")),
+            "Monitor must show the separate durable approval queue, without real sends.");
         Assert(texts.Contains("Telegram 복구 알림 대기함 (오프라인)") &&
             texts.Any(text => text.Contains("실제 발송") &&
                 text.Contains("아닙니다")) &&

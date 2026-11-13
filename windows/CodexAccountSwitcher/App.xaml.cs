@@ -57,6 +57,7 @@ public partial class App : Application
     private WindowsTelegramLocalSenderLease? localTelegramSender;
     private readonly WindowsTelegramAutoSendSession autoTelegramSession = new();
     private WindowsTelegramAutoRecoveryDispatcher? autoTelegramDispatcher;
+    private int telegramSendActivities;
     private NativeSettings? nativeSettings;
     private string? bundledTelegramHostPath;
     private string existingAmanoBotRouteStatus =
@@ -132,7 +133,8 @@ public partial class App : Application
                 SendApprovedTelegramOnceAsync,
                 QueueTelegramConnectivityTest,
                 () => autoTelegramSession.Armed,
-                ChangeAutomaticTelegramSession); MainWindow = window;
+                ChangeAutomaticTelegramSession,
+                StopWindowsTelegramSenderForHandoff); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -287,6 +289,22 @@ public partial class App : Application
         // is explicitly gated, separate, and disabled by default.
     }
 
+    private WindowsTelegramHandoffStatus StopWindowsTelegramSenderForHandoff()
+    {
+        // Only the user's explicit WPF click invokes this. Nothing on the
+        // Mac or any third-party application is modified.
+        if (!Dispatcher.CheckAccess() || exiting || nativeSettings is null ||
+            localTelegramSender is null)
+            return WindowsTelegramHandoffStatus.LocalReleaseNotVerified;
+        return new WindowsTelegramSenderHandoff(
+            autoTelegramSession,
+            localTelegramSender,
+            () => nativeSettings.TelegramPreferences,
+            prefs => nativeSettings.SetTelegramPreferences(prefs),
+            () => Volatile.Read(ref telegramSendActivities) != 0)
+            .StopWindowsSender(userConfirmed: true).Status;
+    }
+
     private bool ChangeAutomaticTelegramSession(
         bool enable, bool userConfirmedOtherHostsOff)
     {
@@ -342,12 +360,20 @@ public partial class App : Application
                 autoTelegramDispatcher is null ||
                 nativeSettings is null || localTelegramSender is null)
                 return;
-            var result = await autoTelegramDispatcher.DeliverNewlyStagedAsync(
-                lane, eventKey, observedAt, wasJustStaged: true,
-                nativeSettings.TelegramPreferences, localTelegramSender,
-                bundledTelegramHostPath, nativeSettings.TelegramBotDirectory);
-            System.Diagnostics.Trace.TraceInformation(
-                "Telegram recovery automatic result: " + result.Status);
+            Interlocked.Increment(ref telegramSendActivities);
+            try
+            {
+                var result = await autoTelegramDispatcher.DeliverNewlyStagedAsync(
+                    lane, eventKey, observedAt, wasJustStaged: true,
+                    nativeSettings.TelegramPreferences, localTelegramSender,
+                    bundledTelegramHostPath, nativeSettings.TelegramBotDirectory);
+                System.Diagnostics.Trace.TraceInformation(
+                    "Telegram recovery automatic result: " + result.Status);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref telegramSendActivities);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
             or InvalidDataException or System.Text.Json.JsonException or
@@ -447,13 +473,16 @@ public partial class App : Application
             var coordinator = new WindowsAmanoApprovedDeliveryCoordinator(
                 telegramOutbox,
                 WindowsExistingAmanoBotProcessAdapter.CreateWindowsTransport());
-            var result = await coordinator.ExecuteApprovedOnceAsync(
-                route, current.Lane, preferences, localTelegramSender,
-                userApprovedExactEvent: true,
-                otherHostsNotSendingConfirmed: otherHostsNotSendingConfirmed);
+            Interlocked.Increment(ref telegramSendActivities);
+            try
+            {
+                var result = await coordinator.ExecuteApprovedOnceAsync(
+                    route, current.Lane, preferences, localTelegramSender,
+                    userApprovedExactEvent: true,
+                    otherHostsNotSendingConfirmed: otherHostsNotSendingConfirmed);
 
-            // Telegram Bot API ACK does NOT prove end-user phone delivery.
-            return result.Status switch
+                // Telegram Bot API ACK does NOT prove end-user phone delivery.
+                return result.Status switch
             {
                 WindowsAmanoApprovalStatus.Acknowledged =>
                     "Telegram Bot API 응답 확인 (message_id " +
@@ -465,7 +494,12 @@ public partial class App : Application
                 WindowsAmanoApprovalStatus.LedgerUnavailable =>
                     "운영 발송 원장 오류 · 발송 차단 또는 결과 불확실",
                 _ => "발송 조건 미충족 · 메시지 전송 없음"
-            };
+                };
+            }
+            finally
+            {
+                Interlocked.Decrement(ref telegramSendActivities);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
             InvalidDataException or System.Text.Json.JsonException or

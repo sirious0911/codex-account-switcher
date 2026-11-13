@@ -46,6 +46,7 @@ internal static class Program
             WindowsAmanoConnectivityTest.Run(output);
             WindowsTelegramAutoSendSessionTest.Run(output);
             WindowsTelegramAutoRecoveryDispatcherTest.Run(output);
+            WindowsTelegramSenderHandoffTest.Run(output);
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
@@ -409,7 +410,8 @@ internal static class Program
                     StringComparison.Ordinal) &&
                 telegramStatus.Text.Contains(telegramPreferences.NotificationsRequested ?
                     "ON(요청)" : "OFF", StringComparison.Ordinal) &&
-                telegramStatus.Text.Contains("실제 Telegram 발송: 대기 이벤트를 선택하고 2단계 확인해야 1건씩 가능",
+                telegramStatus.Text.Contains("실제 Telegram 발송: 이벤트별 2단계 수동 승인 또는 " +
+                    "이번 실행에서 별도로 동의한 자동 복구 알림만 가능",
                     StringComparison.Ordinal),
                 "Isolated WPF settings must display device, role, alert request and disabled delivery.");
             var fiveHour = All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == "显示 5 小时用量");
@@ -458,11 +460,48 @@ internal static class Program
             VerifyTelegramApprovalReviewUi(output);
             VerifyTelegramConnectivityStageUi(output);
             VerifyTelegramAutomaticSessionUi(output);
+            VerifyTelegramSenderHandoffUi(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyTelegramSenderHandoffUi(string output)
+    {
+        var calls = 0;
+        var window = new MainWindow(new FixtureClient(),
+            telegramAutoArmed: () => true,
+            telegramHandoff: () =>
+            {
+                calls++;
+                return WindowsTelegramHandoffStatus.WindowsViewerOffVerified;
+            });
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "telegram-sender-handoff-confirmation.png"));
+        var handoff = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "Windows Sender 중지 및 Mac 이관 준비");
+        Assert(handoff.IsEnabled && calls == 0 &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("Mac의 실제 발송 권한은 활성화하지 않습니다.")),
+            "Handoff must show the local-only limitation, not claim remote ownership.");
+        window.Navigate("accounts");
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "telegram-sender-handoff-return.png"));
+        Assert(calls == 0,
+            "Rendering, navigation and opening settings must never modify Sender role.");
+        window.CloseForExit();
+
+        var detached = new MainWindow(new FixtureClient());
+        detached.Navigate("settings");
+        Render(detached, Path.Combine(output, "telegram-handoff-not-wired.png"));
+        Assert(!All<Button>(detached).Any(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "Windows Sender 중지 및 Mac 이관 준비"),
+            "A window without an explicit product handoff callback cannot mutate Sender.");
+        detached.CloseForExit();
+    }
+
     private static void VerifyTelegramAutomaticSessionUi(string output)
     {
         var armed = false;

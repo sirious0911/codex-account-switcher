@@ -29,6 +29,7 @@ public sealed class MainWindow : Window
     private readonly Func<TelegramNotificationLane, string>? telegramConnectivityTestStager;
     private readonly Func<bool> telegramAutomaticSessionArmed;
     private readonly Func<bool, bool, bool>? telegramAutomaticSessionAction;
+    private readonly Func<WindowsTelegramHandoffStatus>? telegramWindowsHandoffAction;
     private WindowsTelegramApprovalRow? selectedTelegramApproval;
     private string? telegramApprovalResult;
     private bool telegramApprovalBusy;
@@ -65,7 +66,8 @@ public sealed class MainWindow : Window
         Func<WindowsTelegramApprovalRow, bool, Task<string>>? telegramApprovedSend = null,
         Func<TelegramNotificationLane, string>? telegramTestStage = null,
         Func<bool>? telegramAutoArmed = null,
-        Func<bool, bool, bool>? telegramAutoAction = null)
+        Func<bool, bool, bool>? telegramAutoAction = null,
+        Func<WindowsTelegramHandoffStatus>? telegramHandoff = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
@@ -83,6 +85,7 @@ public sealed class MainWindow : Window
         telegramConnectivityTestStager = telegramTestStage;
         telegramAutomaticSessionArmed = telegramAutoArmed ?? (() => false);
         telegramAutomaticSessionAction = telegramAutoAction;
+        telegramWindowsHandoffAction = telegramHandoff;
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -913,6 +916,53 @@ public sealed class MainWindow : Window
             settings.Children.Add(toggleAutomatic);
         }
 
+        if (telegramWindowsHandoffAction is not null)
+        {
+            var handoffHeading = Text("Mac/다른 PC로 송신 담당 전환 준비", 12, bold: true);
+            handoffHeading.Margin = new Thickness(0, 16, 0, 4);
+            settings.Children.Add(handoffHeading);
+            var handoffInfo = Text(
+                "이 PC의 자동 Telegram 발송을 해제하고, Sender 역할과 알림을 " +
+                "Viewer/OFF로 저장한 뒤 Windows 로컬 점유 해제를 확인합니다. " +
+                "Mac의 실제 발송 권한은 활성화하지 않습니다. 진행 중이던 " +
+                "Telegram 메시지는 중간에 취소할 수 없습니다.",
+                10.5, muted: true);
+            handoffInfo.TextWrapping = TextWrapping.Wrap;
+            settings.Children.Add(handoffInfo);
+            var stopWindows = Button("Windows Sender 중지 및 Mac 이관 준비", () => {
+                var confirmed = MessageBox.Show(this,
+                    "이 PC의 자동 Telegram 송신을 중지하고 Sender 역할을 " +
+                    "Viewer/OFF로 바꾸시겠습니까?" +
+                    Environment.NewLine +
+                    "실제 송신 중이면 이관을 완료하지 않고 보류합니다." +
+                    Environment.NewLine +
+                    "Mac 측 Sender는 별도로 검증·활성화해야 합니다.",
+                    "Windows Telegram 송신 중지 확인",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                    MessageBoxResult.No);
+                if (confirmed != MessageBoxResult.Yes) return;
+
+                var result = telegramWindowsHandoffAction();
+                localError = result switch
+                {
+                    WindowsTelegramHandoffStatus.WindowsViewerOffVerified =>
+                        "Windows Viewer/OFF·로컬 송신 점유 해제 확인. " +
+                        "Mac 송신자 활성화는 아직 미완료입니다.",
+                    WindowsTelegramHandoffStatus.InFlightSendMustFinish =>
+                        "진행 중인 Telegram 발송이 있습니다. 자동 송신은 중지했으며 " +
+                        "전송 결과를 확인한 후 이관을 다시 실행하세요.",
+                    _ => "Windows 송신자 해제를 검증하지 못했습니다. " +
+                        "Mac Sender를 활성화하지 마세요."
+                };
+                Render();
+            });
+            stopWindows.Margin = new Thickness(0, 6, 0, 6);
+            stopWindows.IsEnabled = telegram.DeviceRole ==
+                TelegramNotificationDeviceRole.Sender ||
+                telegram.NotificationsRequested || autoArmed;
+            settings.Children.Add(stopWindows);
+        }
+
         var selectedRole = telegram.DeviceRole == TelegramNotificationDeviceRole.Sender
             ? "Sender 선택(1건 수동 승인 필요)" : "Viewer";
         var requestedAlerts = telegram.NotificationsRequested ? "ON(요청)" : "OFF";
@@ -920,7 +970,8 @@ public sealed class MainWindow : Window
             "이 기기: " + Environment.MachineName +
             " | 저장된 역할: " + selectedRole +
             " | 알림 요청: " + requestedAlerts +
-            " | 실제 Telegram 발송: 대기 이벤트를 선택하고 2단계 확인해야 1건씩 가능. " +
+            " | 실제 Telegram 발송: 이벤트별 2단계 수동 승인 또는 " +
+            "이번 실행에서 별도로 동의한 자동 복구 알림만 가능. " +
             "역할과 알림 설정은 이 PC에 저장되며 앱 재시작 후에도 유지됩니다. " +
             "Sender를 선택해도 다른 PC의 Sender가 자동 중지되지 않습니다. " +
             "설정에서 알림 ON만 선택해도 자동 발송되지 않습니다.",

@@ -24,6 +24,11 @@ public sealed class MainWindow : Window
     private readonly Func<string> bundledTelegramScriptsStatus;
     private readonly Func<string> existingAmanoBotRouteStatus;
     private readonly Func<string> telegramProductionOutboxStatus;
+    private readonly Func<IReadOnlyList<WindowsTelegramApprovalRow>> pendingTelegramApprovals;
+    private readonly Func<WindowsTelegramApprovalRow, bool, Task<string>>? approvedTelegramSender;
+    private WindowsTelegramApprovalRow? selectedTelegramApproval;
+    private string? telegramApprovalResult;
+    private bool telegramApprovalBusy;
     private string page = "accounts";
     private AccountRow? target;
     private string? localError;
@@ -52,7 +57,9 @@ public sealed class MainWindow : Window
         Func<string>? telegramLocalSenderStatus = null,
         Func<string>? packagedTelegramScriptsStatus = null,
         Func<string>? existingAmanoBotStatus = null,
-        Func<string>? productionTelegramOutboxStatus = null)
+        Func<string>? productionTelegramOutboxStatus = null,
+        Func<IReadOnlyList<WindowsTelegramApprovalRow>>? telegramPendingApprovals = null,
+        Func<WindowsTelegramApprovalRow, bool, Task<string>>? telegramApprovedSend = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
@@ -65,6 +72,8 @@ public sealed class MainWindow : Window
             (() => "기존 주차대행 Telegram 봇: 전송 경로 미확인 · 실제 발송 차단");
         telegramProductionOutboxStatus = productionTelegramOutboxStatus ??
             (() => "운영 알림 대기함: 연결되지 않음 · 실제 발송 차단");
+        pendingTelegramApprovals = telegramPendingApprovals ?? (() => []);
+        approvedTelegramSender = telegramApprovedSend;
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -158,10 +167,12 @@ public sealed class MainWindow : Window
             heading.Margin = new Thickness(20, 16, 20, 16); body.Children.Add(heading);
         } else {
             var header = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 16, 20, 16) };
-            header.Children.Add(Button("", () => Navigate(page == "remove" ? "manage" : "accounts"), "\uE72B"));
+            header.Children.Add(Button("", () => Navigate(page == "remove" ? "manage" :
+                page == "telegram-approve" ? "monitor" : "accounts"), "\uE72B"));
             AutomationProperties.SetName(header.Children[0], T("back"));
             var title = target != null && page is "switch" or "remove"
                 ? T(page + "_title").Replace("%@", target.Profile.DisplayName)
+                : page == "telegram-approve" ? "Telegram 알림 1건 발송 검토"
                 : T(page == "settings" ? "settings" : page == "monitor" ? "monitor_title" : "accounts");
             var heading = Text(title, 20, bold: true); heading.Margin = new Thickness(12, 0, 0, 0); header.Children.Add(heading);
             body.Children.Add(header);
@@ -169,6 +180,7 @@ public sealed class MainWindow : Window
         if (page is "switch" or "remove") Confirmation(body);
         else if (page == "settings") Settings(body);
         else if (page == "monitor") Monitor(body);
+        else if (page == "telegram-approve") TelegramApprovalReview(body);
         else Accounts(body, page == "manage");
         Content = new Border { Background = B("Surface"),
             Child = new ScrollViewer { Content = body, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled } };
@@ -356,6 +368,39 @@ public sealed class MainWindow : Window
         var productionSummary = Text(telegramProductionOutboxStatus(), 10.5, muted: true);
         productionSummary.TextWrapping = TextWrapping.Wrap;
         content.Children.Add(productionSummary);
+        if (telegramApprovalResult is not null)
+        {
+            var recentResult = Text(telegramApprovalResult, 10.5, muted: true);
+            recentResult.TextWrapping = TextWrapping.Wrap;
+            content.Children.Add(recentResult);
+        }
+        var waiting = pendingTelegramApprovals();
+        if (waiting.Count > 0)
+        {
+            var reviewNote = Text(
+                "대기 항목은 자동 발송되지 않습니다. 한 건씩 검토하고 직접 승인해야 합니다.",
+                10.5, muted: true);
+            reviewNote.TextWrapping = TextWrapping.Wrap;
+            content.Children.Add(reviewNote);
+            foreach (var item in waiting.Take(5))
+            {
+                var entry = item;
+                var description = Text(entry.LaneLabel + " · " +
+                    entry.ObservedAt.ToOffset(TimeSpan.FromHours(9))
+                        .ToString("MM-dd HH:mm", CultureInfo.InvariantCulture) +
+                    " KST", 10.5, muted: true);
+                description.ToolTip = "대기 이벤트: " + entry.EventKey;
+                var openApproval = Button("1건 검토", () =>
+                {
+                    selectedTelegramApproval = entry;
+                    Navigate("telegram-approve");
+                });
+                openApproval.IsEnabled &= approvedTelegramSender is not null;
+                var row = Pair(description, openApproval);
+                row.Margin = new Thickness(0, 5, 0, 0);
+                content.Children.Add(row);
+            }
+        }
         var historyHeading = Text(T("monitor_history"), 13, bold: true);
         historyHeading.Margin = new Thickness(0, 12, 0, 8);
         content.Children.Add(historyHeading);
@@ -377,6 +422,109 @@ public sealed class MainWindow : Window
         body.Children.Add(content);
     }
 
+
+    private void TelegramApprovalReview(StackPanel body)
+    {
+        var panel = new StackPanel { Margin = new Thickness(20, 0, 20, 20) };
+        body.Children.Add(panel);
+        var selected = selectedTelegramApproval;
+        var current = selected is not null && pendingTelegramApprovals().Any(item =>
+            item.Lane == selected.Lane && item.EventKey == selected.EventKey &&
+            item.ObservedAt == selected.ObservedAt);
+        if (!current || selected is null)
+        {
+            panel.Children.Add(Text("대기 항목이 없거나 이미 처리된 알림입니다.", 11, muted: true));
+            return;
+        }
+
+        var identity = Text(selected.LaneLabel + " · 복구 관측 " +
+            selected.ObservedAt.ToOffset(TimeSpan.FromHours(9))
+                .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " KST",
+            12, bold: true);
+        identity.TextWrapping = TextWrapping.Wrap;
+        panel.Children.Add(identity);
+        var reference = Text("이벤트 ID: " + selected.EventKey[..12] + "…", 10.5, muted: true);
+        reference.ToolTip = selected.EventKey;
+        panel.Children.Add(reference);
+
+        var warning = Text(
+            "이 버튼을 승인하면 기존 인천공항 주차대행 Telegram 봇을 통해 " +
+            "이 알림을 실제로 1회 전송합니다. Telegram Bot API의 응답은 " +
+            "휴대전화 수신 여부를 보증하지 않습니다. " +
+            "다른 PC/Mac의 송신 중지는 앱이 원격으로 증명하지 못합니다.",
+            10.5, muted: true);
+        warning.TextWrapping = TextWrapping.Wrap;
+        warning.Margin = new Thickness(0, 12, 0, 12);
+        panel.Children.Add(warning);
+
+        var senderIntent = native.TelegramPreferences;
+        var permittedBySettings = selected.Lane == TelegramNotificationLane.FiveHourRecovery
+            ? senderIntent.WantsFiveHour : senderIntent.WantsWeekly;
+        if (!permittedBySettings)
+        {
+            panel.Children.Add(Text(
+                "설정에서 현재 Windows PC를 Sender로 선택하고 해당 알림을 ON으로 해야 합니다.",
+                11, muted: true));
+        }
+        if (approvedTelegramSender is null)
+        {
+            panel.Children.Add(Text(
+                "현재 실행 파일에서는 Telegram 송신 기능을 사용할 수 없습니다.",
+                11, muted: true));
+        }
+
+        var acknowledge = new CheckBox
+        {
+            Content = "현재 PC 이외의 다른 Windows/Mac에서 Telegram 송신이 꺼져 있음을 직접 확인했습니다.",
+            IsChecked = false,
+            FontSize = 11,
+            Margin = new Thickness(0, 4, 0, 10)
+        };
+        AutomationProperties.SetName(acknowledge, "다른 장치 Telegram 송신 OFF 확인");
+        panel.Children.Add(acknowledge);
+        var send = Button("선택한 알림 1건 실제 Telegram 발송", () => { });
+        send.IsEnabled = false;
+        acknowledge.Checked += (_, _) =>
+            send.IsEnabled = !telegramApprovalBusy && !IsBusy &&
+                permittedBySettings && approvedTelegramSender is not null;
+        acknowledge.Unchecked += (_, _) => send.IsEnabled = false;
+        send.Click += async (_, _) =>
+        {
+            if (telegramApprovalBusy || acknowledge.IsChecked != true ||
+                approvedTelegramSender is null || selectedTelegramApproval != selected ||
+                !permittedBySettings || IsBusy)
+                return;
+            var confirmation = MessageBox.Show(this,
+                selected.LaneLabel + Environment.NewLine +
+                "다른 장치의 발송이 중지된 것을 직접 확인했으며, " +
+                "이 이벤트 1건을 기존 Telegram 봇으로 실제 전송하시겠습니까?" +
+                Environment.NewLine + "전송 실패나 응답 손실 시 자동 재발송하지 않습니다.",
+                "실제 Telegram 발송 최종 확인",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                MessageBoxResult.No);
+            if (confirmation != MessageBoxResult.Yes) return;
+            telegramApprovalBusy = true;
+            send.IsEnabled = false;
+            try
+            {
+                // Real process invocation is reachable ONLY from this
+                // event-specific, double-confirmed WPF click, never from
+                // an automatic recovery callback or saved preference.
+                telegramApprovalResult = await approvedTelegramSender(selected, true);
+            }
+            catch (Exception)
+            {
+                telegramApprovalResult = "발송 상태 확인 불가 · 중복 방지를 위해 자동 재시도하지 않습니다.";
+            }
+            finally
+            {
+                telegramApprovalBusy = false;
+                selectedTelegramApproval = null;
+                Navigate("monitor");
+            }
+        };
+        panel.Children.Add(send);
+    }
 
     private void RemoteQuotaSection(StackPanel content)
     {

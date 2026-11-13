@@ -53,6 +53,19 @@ internal sealed class WindowsAmanoProductionOutbox
         }
     }
 
+    // The WPF view gets only human-review fields, never a reservation token,
+    // bot credentials, or any authority to send a message.
+    internal IReadOnlyList<WindowsTelegramApprovalRow> ReadPendingRows()
+    {
+        return Read()
+            .Where(item => item.Status == WindowsAmanoOutboxStatus.AwaitingApproval)
+            .OrderByDescending(item => item.ObservedAt)
+            .Take(10)
+            .Select(item => new WindowsTelegramApprovalRow(
+                item.Lane, item.EventKey, item.ObservedAt))
+            .ToArray();
+    }
+
     internal IReadOnlyList<WindowsAmanoOutboxItem> Read()
     {
         lock (sync)
@@ -268,4 +281,17 @@ internal sealed class WindowsAmanoOutboxState
 {
     public int SchemaVersion { get; set; } = 1;
     public List<WindowsAmanoOutboxItem> Items { get; set; } = [];
+}
+
+
+/// <summary>
+/// Review-only projection of one unsent, confirmed 5H/7D recovery event.
+/// </summary>
+public sealed record WindowsTelegramApprovalRow(
+    TelegramNotificationLane Lane,
+    string EventKey,
+    DateTimeOffset ObservedAt)
+{
+    public string LaneLabel => Lane == TelegramNotificationLane.FiveHourRecovery
+        ? "5H · 기존 모니터 봇(묵음)" : "7D · 기존 얼럿 봇";
 }

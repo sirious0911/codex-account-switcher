@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -121,7 +122,9 @@ public partial class App : Application
                 () => bundledBotScripts.Display,
                 () => existingAmanoBotRouteStatus,
                 () => telegramOutbox?.ReadDisplay() ??
-                    "운영 알림 대기함: 확인 불가 · 실제 발송 차단"); MainWindow = window;
+                    "운영 알림 대기함: 확인 불가 · 실제 발송 차단",
+                ReadPendingTelegramApprovalRows,
+                SendApprovedTelegramOnceAsync); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -264,6 +267,85 @@ public partial class App : Application
             }
         }
         // No invocation, approval flags, DPAPI reads, or Telegram network.
+    }
+
+    private IReadOnlyList<WindowsTelegramApprovalRow> ReadPendingTelegramApprovalRows()
+    {
+        try { return telegramOutbox?.ReadPendingRows() ?? []; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            InvalidDataException or System.Text.Json.JsonException or
+            System.Security.SecurityException)
+        {
+            // Bad production ledger must never be silently rebuilt or sent.
+            System.Diagnostics.Trace.TraceWarning(
+                "Telegram approval queue unreadable: " + ex.GetType().Name);
+            return [];
+        }
+    }
+
+    private async Task<string> SendApprovedTelegramOnceAsync(
+        WindowsTelegramApprovalRow requested, bool otherHostsNotSendingConfirmed)
+    {
+        // The sole entry point for real Telegram transmission is an explicit
+        // per-event, double-confirmed WPF click. No monitor callback invokes it.
+        if (exiting || !Dispatcher.CheckAccess() || !otherHostsNotSendingConfirmed ||
+            telegramOutbox is null || nativeSettings is null ||
+            bundledTelegramHostPath is null || localTelegramSender is null)
+            return "발송 조건 미충족 · 메시지 전송 없음";
+        try
+        {
+            var current = telegramOutbox.Read().SingleOrDefault(entry =>
+                entry.Lane == requested.Lane &&
+                entry.EventKey == requested.EventKey &&
+                entry.ObservedAt == requested.ObservedAt &&
+                entry.Status == WindowsAmanoOutboxStatus.AwaitingApproval);
+            if (current is null)
+                return "이미 처리됐거나 대기 기록이 없는 이벤트 · 발송 없음";
+
+            var preferences = nativeSettings.TelegramPreferences;
+            if (localTelegramSender.Update(preferences) !=
+                WindowsLocalSenderLeaseState.LocalClaimHeld)
+                return "Windows 로컬 Sender 점유 확인 실패 · 발송 없음";
+
+            var route = WindowsExistingAmanoBotRoute.Prepare(
+                bundledTelegramHostPath, nativeSettings.TelegramBotDirectory,
+                current.Lane, current.EventKey, current.ObservedAt);
+            if (route is null)
+                return "기존 Telegram 봇 경로 또는 스크립트 확인 실패 · 발송 없음";
+
+            var coordinator = new WindowsAmanoApprovedDeliveryCoordinator(
+                telegramOutbox,
+                WindowsExistingAmanoBotProcessAdapter.CreateWindowsTransport());
+            var result = await coordinator.ExecuteApprovedOnceAsync(
+                route, current.Lane, preferences, localTelegramSender,
+                userApprovedExactEvent: true,
+                otherHostsNotSendingConfirmed: otherHostsNotSendingConfirmed);
+
+            // Telegram Bot API ACK does NOT prove end-user phone delivery.
+            return result.Status switch
+            {
+                WindowsAmanoApprovalStatus.Acknowledged =>
+                    "Telegram Bot API 응답 확인 (message_id " +
+                    result.TelegramMessageId + ") · 휴대전화 수신 별도 확인",
+                WindowsAmanoApprovalStatus.Uncertain =>
+                    "Telegram 전송 결과 불확실 · 중복 방지를 위해 자동 재발송하지 않음",
+                WindowsAmanoApprovalStatus.NotPending =>
+                    "대기 중이 아닌 이벤트 · 중복 발송 차단",
+                WindowsAmanoApprovalStatus.LedgerUnavailable =>
+                    "운영 발송 원장 오류 · 발송 차단 또는 결과 불확실",
+                _ => "발송 조건 미충족 · 메시지 전송 없음"
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            InvalidDataException or System.Text.Json.JsonException or
+            ArgumentException or System.Security.SecurityException)
+        {
+            // A transport failure after the durable claim may be ambiguous.
+            // Never automatically retry or expose bot credentials.
+            System.Diagnostics.Trace.TraceWarning(
+                "Approved Telegram dispatch status unknown: " + ex.GetType().Name);
+            return "Telegram 승인 처리 결과 확인 불가 · 자동 재발송하지 않음";
+        }
     }
 
     private void InvalidateFiveHour100(Guid? profileID)

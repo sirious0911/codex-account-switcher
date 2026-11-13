@@ -419,11 +419,77 @@ internal static class Program
             Assert(closed, "Explicit application exit must release the window.");
             WindowsLocalSenderLeaseTest.Run(output);
             VerifyMonitorPage(output, VerifyOfflineRecoveryInbox(output));
+            VerifyTelegramApprovalReviewUi(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyTelegramApprovalReviewUi(string output)
+    {
+        var key = new string('f', 64);
+        var selected = new WindowsTelegramApprovalRow(
+            TelegramNotificationLane.FiveHourRecovery, key,
+            new DateTimeOffset(2026, 11, 13, 1, 0, 0, TimeSpan.Zero));
+        var callbackCalls = 0;
+        var window = new MainWindow(new FixtureClient(),
+            telegramPendingApprovals: () => [selected],
+            telegramApprovedSend: (_, _) =>
+            {
+                callbackCalls++;
+                return Task.FromResult("synthetic test only");
+            });
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "telegram-approval-queue-zh.png"));
+        var review = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토");
+        Assert(review.IsEnabled &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("대기 항목은 자동 발송되지 않습니다.")) &&
+            callbackCalls == 0,
+            "A staged event may only open a user review; never auto-send.");
+
+        review.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-approval-review-zh.png"));
+        Assert(window.CurrentPage == "telegram-approve" &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("다른 PC/Mac의 송신 중지는 앱이 원격으로 증명하지 못합니다.")) &&
+            All<TextBlock>(window).Any(text =>
+                text.ToolTip is string tip && tip == key),
+            "Exact-event review must warn the user about missing cross-host proof.");
+
+        var check = All<CheckBox>(window).Single(checkbox =>
+            System.Windows.Automation.AutomationProperties.GetName(checkbox) ==
+                "다른 장치 Telegram 송신 OFF 확인");
+        var submit = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "선택한 알림 1건 실제 Telegram 발송");
+        Assert(check.IsChecked == false && !submit.IsEnabled && callbackCalls == 0,
+            "Actual send must be disabled until explicit device confirmation.");
+
+        check.IsChecked = true;
+        check.IsChecked = false;
+        Assert(!submit.IsEnabled && callbackCalls == 0,
+            "Enabling/disabling a checkbox must never dispatch Telegram.");
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "telegram-approval-queue-return-zh.png"));
+        Assert(callbackCalls == 0 &&
+            All<Button>(window).Any(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토"),
+            "Abandoning review must leave the event unconsumed.");
+        window.CloseForExit();
+
+        var disabled = new MainWindow(new FixtureClient(),
+            telegramPendingApprovals: () => [selected]);
+        disabled.Navigate("monitor");
+        Render(disabled, Path.Combine(output, "telegram-approval-unwired-zh.png"));
+        Assert(All<Button>(disabled).Single(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토")
+                    .IsEnabled == false,
+            "Without an explicit send callback, no UI may approve any event.");
+        disabled.CloseForExit();
+    }
+
     private static OfflineTelegramInboxSnapshot VerifyOfflineRecoveryInbox(string output)
     {
         var directory = Path.Combine(output, "telegram-recovery-inbox-fixture");

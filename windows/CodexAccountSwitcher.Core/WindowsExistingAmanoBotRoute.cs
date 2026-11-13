@@ -15,7 +15,8 @@ public static class WindowsExistingAmanoBotRoute
         string? existingAmanoBotDirectory,
         TelegramNotificationLane lane,
         string? eventKey,
-        DateTimeOffset observedAt)
+        DateTimeOffset observedAt,
+        bool isTest = false)
     {
         if (string.IsNullOrWhiteSpace(existingAmanoBotDirectory) ||
             eventKey is not { Length: 64 } ||
@@ -40,13 +41,17 @@ public static class WindowsExistingAmanoBotRoute
 
         var offset = observedAt.ToOffset(TimeSpan.FromHours(9));
         var timestamp = offset.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
-        var message = lane == TelegramNotificationLane.FiveHourRecovery
-            ? "Codex 5시간 한도 복구: 잔여 사용량 100% (확인 " + timestamp + " KST)"
-            : "Codex 주간(7일) 한도 복구: 잔여 사용량 100% (확인 " + timestamp + " KST)";
+        var message = isTest
+            ? lane == TelegramNotificationLane.FiveHourRecovery
+                ? "Codex 5시간 알림 연결 테스트 (확인 " + timestamp + " KST)"
+                : "Codex 7일 알림 연결 테스트 (확인 " + timestamp + " KST)"
+            : lane == TelegramNotificationLane.FiveHourRecovery
+                ? "Codex 5시간 한도 복구: 잔여 사용량 100% (확인 " + timestamp + " KST)"
+                : "Codex 주간(7일) 한도 복구: 잔여 사용량 100% (확인 " + timestamp + " KST)";
         var path = Path.Combine(Path.GetDirectoryName(bundledHostPath)!, sender);
         return new WindowsExistingAmanoBotInvocation(
             path, existingAmanoBotDirectory, eventKey, message,
-            lane == TelegramNotificationLane.FiveHourRecovery);
+            lane == TelegramNotificationLane.FiveHourRecovery, isTest);
     }
 }
 
@@ -55,7 +60,8 @@ public sealed record WindowsExistingAmanoBotInvocation(
     string ExistingAmanoBotDirectory,
     string EventKey,
     string Message,
-    bool Silent)
+    bool Silent,
+    bool IsTest = false)
 {
     // This is a route preview, not a process launch or send authorization.
     public bool ActualTelegramSendAuthorized => false;

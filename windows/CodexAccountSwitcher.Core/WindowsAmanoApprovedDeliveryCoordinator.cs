@@ -47,6 +47,13 @@ internal sealed class WindowsAmanoApprovedDeliveryCoordinator
         WindowsAmanoOutboxItem? reservation;
         try
         {
+            // Preserve the test-vs-real distinction across restarts and direct
+            // callers. A route may NEVER change a test to a recovery claim.
+            if (!outbox.Read().Any(item => item.Lane == lane &&
+                item.EventKey == route.EventKey &&
+                item.IsTest == route.IsTest &&
+                item.Status == WindowsAmanoOutboxStatus.AwaitingApproval))
+                return new(WindowsAmanoApprovalStatus.NotPending);
             reservation = outbox.ReserveOnce(lane, route.EventKey,
                 userApprovedExactEvent, verifiedLocalSender: true,
                 crossHostSenderHandoffConfirmed: otherHostsNotSendingConfirmed);

@@ -124,7 +124,8 @@ public partial class App : Application
                 () => telegramOutbox?.ReadDisplay() ??
                     "운영 알림 대기함: 확인 불가 · 실제 발송 차단",
                 ReadPendingTelegramApprovalRows,
-                SendApprovedTelegramOnceAsync); MainWindow = window;
+                SendApprovedTelegramOnceAsync,
+                QueueTelegramConnectivityTest); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -283,6 +284,44 @@ public partial class App : Application
         }
     }
 
+    private string QueueTelegramConnectivityTest(TelegramNotificationLane lane)
+    {
+        // Creates only a clearly labelled, user-reviewed pending TEST event.
+        // No Telegram network, credential read, sender execution or approval.
+        if (exiting || !Dispatcher.CheckAccess() || telegramOutbox is null ||
+            nativeSettings is null || bundledTelegramHostPath is null)
+            return "연결 테스트 대기함을 사용할 수 없습니다. 발송 없음";
+        try
+        {
+            var preferences = nativeSettings.TelegramPreferences;
+            var enabled = lane == TelegramNotificationLane.FiveHourRecovery
+                ? preferences.WantsFiveHour : preferences.WantsWeekly;
+            if (!enabled)
+                return "현재 PC의 Sender 및 해당 알림 ON 설정이 필요합니다. 발송 없음";
+            var now = DateTimeOffset.UtcNow;
+            var preview = WindowsExistingAmanoBotRoute.Prepare(
+                bundledTelegramHostPath, nativeSettings.TelegramBotDirectory,
+                lane, new string('0', 64), now, isTest: true);
+            if (preview is null ||
+                !WindowsExistingAmanoBotProcessAdapter.ValidRoute(preview))
+                return "기존 봇 폴더·내장 테스트 스크립트 확인 실패. 발송 없음";
+            var item = telegramOutbox.StageConnectivityTest(
+                lane, preferences, now, reviewedBotRouteAvailable: true);
+            if (item is null)
+                return "테스트 대기 항목 생성 실패 · 발송 없음";
+            return item.LaneLabel +
+                ": 승인 대기 항목 생성 완료. 실제 발송은 1건 검토 후 별도 확인 필요";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
+            InvalidDataException or System.Text.Json.JsonException or
+            ArgumentException or System.Security.SecurityException)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "Telegram connectivity test stage error: " + ex.GetType().Name);
+            return "테스트 대기함 오류 · 실제 발송하지 않음";
+        }
+    }
+
     private async Task<string> SendApprovedTelegramOnceAsync(
         WindowsTelegramApprovalRow requested, bool otherHostsNotSendingConfirmed)
     {
@@ -298,6 +337,7 @@ public partial class App : Application
                 entry.Lane == requested.Lane &&
                 entry.EventKey == requested.EventKey &&
                 entry.ObservedAt == requested.ObservedAt &&
+                entry.IsTest == requested.IsTest &&
                 entry.Status == WindowsAmanoOutboxStatus.AwaitingApproval);
             if (current is null)
                 return "이미 처리됐거나 대기 기록이 없는 이벤트 · 발송 없음";
@@ -309,7 +349,8 @@ public partial class App : Application
 
             var route = WindowsExistingAmanoBotRoute.Prepare(
                 bundledTelegramHostPath, nativeSettings.TelegramBotDirectory,
-                current.Lane, current.EventKey, current.ObservedAt);
+                current.Lane, current.EventKey, current.ObservedAt,
+                isTest: current.IsTest);
             if (route is null)
                 return "기존 Telegram 봇 경로 또는 스크립트 확인 실패 · 발송 없음";
 

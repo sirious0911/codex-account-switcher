@@ -12,7 +12,8 @@ param(
     [Parameter(Mandatory = $true)][string]$EventKey,
     [Parameter(Mandatory = $true)][string]$Message,
     [switch]$ApprovedSingleSend,
-    [switch]$WindowsSenderVerified
+    [switch]$WindowsSenderVerified,
+    [switch]$TestSend
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -20,8 +21,12 @@ Set-StrictMode -Version Latest
 # No file reads, decryption, or network without both explicit gates.
 if (-not $ApprovedSingleSend -or -not $WindowsSenderVerified) { exit 40 }
 if ($EventKey -cnotmatch '\A[a-f0-9]{64}\z') { exit 40 }
-if ($Message.Length -gt 250 -or
-    $Message -cnotmatch '\ACodex 5시간 한도 복구: 잔여 사용량 100% \(확인 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST\)\z') {
+$messageFormat = if ($TestSend) {
+    '\ACodex 5시간 알림 연결 테스트 \(확인 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST\)\z'
+} else {
+    '\ACodex 5시간 한도 복구: 잔여 사용량 100% \(확인 [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} KST\)\z'
+}
+if ($Message.Length -gt 250 -or $Message -cnotmatch $messageFormat) {
     exit 40
 }
 

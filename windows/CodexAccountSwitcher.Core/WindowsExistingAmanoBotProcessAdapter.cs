@@ -86,9 +86,13 @@ internal sealed class WindowsExistingAmanoBotProcessAdapter
 
             // The reviewed PowerShell scripts independently enforce these
             // exact message forms before reading any credential files.
-            var prefix = route.Silent
-                ? "Codex 5시간 한도 복구: 잔여 사용량 100% (확인 "
-                : "Codex 주간(7일) 한도 복구: 잔여 사용량 100% (확인 ";
+            var prefix = route.IsTest
+                ? route.Silent
+                    ? "Codex 5시간 알림 연결 테스트 (확인 "
+                    : "Codex 7일 알림 연결 테스트 (확인 "
+                : route.Silent
+                    ? "Codex 5시간 한도 복구: 잔여 사용량 100% (확인 "
+                    : "Codex 주간(7일) 한도 복구: 잔여 사용량 100% (확인 ";
             if (!route.Message.StartsWith(prefix, StringComparison.Ordinal) ||
                 !route.Message.EndsWith(" KST)", StringComparison.Ordinal))
                 return false;
@@ -252,6 +256,8 @@ internal sealed class WindowsAmanoPowerShellRunner : IWindowsAmanoScriptRunner
             "-ApprovedSingleSend", "-WindowsSenderVerified"
         })
             start.ArgumentList.Add(item);
+        if (route.IsTest)
+            start.ArgumentList.Add("-TestSend");
 
         return start;
     }

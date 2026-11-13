@@ -12,9 +12,9 @@ public static class WindowsPackagedTelegramScripts
     public const string MonitorScriptName = "send-fivehour100-existing-monitor-bot.ps1";
     public const string AlertScriptName = "send-weekly100-existing-alert-bot.ps1";
     public const string MonitorSha256 =
-        "951eee1062a74df31492ccca3188f2d6d73c811f50fcd8389689102e50df9dd4";
+        "57a671a98293326e90932027bb8003d1dc63dd67e2c2e04dc6a1d444c0cd4ec9";
     public const string AlertSha256 =
-        "41c391f9279c9a1672ed63085cddc716863c1d0713cd8048f04615154281296c";
+        "ca1877688a28c291728a419fda9b1a0bb05d22bd985ffc52b912544af6f79a9f";
 
     public static WindowsPackagedTelegramScriptInspection Inspect(string? hostExecutable)
     {

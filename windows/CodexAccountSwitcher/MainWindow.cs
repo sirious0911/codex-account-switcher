@@ -26,6 +26,7 @@ public sealed class MainWindow : Window
     private readonly Func<string> telegramProductionOutboxStatus;
     private readonly Func<IReadOnlyList<WindowsTelegramApprovalRow>> pendingTelegramApprovals;
     private readonly Func<WindowsTelegramApprovalRow, bool, Task<string>>? approvedTelegramSender;
+    private readonly Func<TelegramNotificationLane, string>? telegramConnectivityTestStager;
     private WindowsTelegramApprovalRow? selectedTelegramApproval;
     private string? telegramApprovalResult;
     private bool telegramApprovalBusy;
@@ -59,7 +60,8 @@ public sealed class MainWindow : Window
         Func<string>? existingAmanoBotStatus = null,
         Func<string>? productionTelegramOutboxStatus = null,
         Func<IReadOnlyList<WindowsTelegramApprovalRow>>? telegramPendingApprovals = null,
-        Func<WindowsTelegramApprovalRow, bool, Task<string>>? telegramApprovedSend = null)
+        Func<WindowsTelegramApprovalRow, bool, Task<string>>? telegramApprovedSend = null,
+        Func<TelegramNotificationLane, string>? telegramTestStage = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
@@ -74,6 +76,7 @@ public sealed class MainWindow : Window
             (() => "운영 알림 대기함: 연결되지 않음 · 실제 발송 차단");
         pendingTelegramApprovals = telegramPendingApprovals ?? (() => []);
         approvedTelegramSender = telegramApprovedSend;
+        telegramConnectivityTestStager = telegramTestStage;
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -374,6 +377,30 @@ public sealed class MainWindow : Window
             recentResult.TextWrapping = TextWrapping.Wrap;
             content.Children.Add(recentResult);
         }
+        if (telegramConnectivityTestStager is not null)
+        {
+            var testHint = Text(
+                "실제 100% 복구를 기다리지 않고 기존 봇 연결을 시험할 수 있습니다. " +
+                "테스트 항목 생성은 메시지를 발송하지 않습니다.",
+                10.5, muted: true);
+            testHint.TextWrapping = TextWrapping.Wrap;
+            content.Children.Add(testHint);
+            foreach (var testLane in new[] {
+                TelegramNotificationLane.FiveHourRecovery,
+                TelegramNotificationLane.WeeklyRecovery })
+            {
+                var lane = testLane;
+                var label = lane == TelegramNotificationLane.FiveHourRecovery
+                    ? "5H 묵음 테스트 항목 생성" : "7D 일반 알림 테스트 항목 생성";
+                var createTest = Button(label, () =>
+                {
+                    telegramApprovalResult = telegramConnectivityTestStager(lane);
+                    Navigate("monitor");
+                });
+                createTest.Margin = new Thickness(0, 5, 0, 0);
+                content.Children.Add(createTest);
+            }
+        }
         var waiting = pendingTelegramApprovals();
         if (waiting.Count > 0)
         {
@@ -430,14 +457,16 @@ public sealed class MainWindow : Window
         var selected = selectedTelegramApproval;
         var current = selected is not null && pendingTelegramApprovals().Any(item =>
             item.Lane == selected.Lane && item.EventKey == selected.EventKey &&
-            item.ObservedAt == selected.ObservedAt);
+            item.ObservedAt == selected.ObservedAt &&
+            item.IsTest == selected.IsTest);
         if (!current || selected is null)
         {
             panel.Children.Add(Text("대기 항목이 없거나 이미 처리된 알림입니다.", 11, muted: true));
             return;
         }
 
-        var identity = Text(selected.LaneLabel + " · 복구 관측 " +
+        var identity = Text(selected.LaneLabel +
+            (selected.IsTest ? " · 테스트 생성 " : " · 복구 관측 ") +
             selected.ObservedAt.ToOffset(TimeSpan.FromHours(9))
                 .ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " KST",
             12, bold: true);

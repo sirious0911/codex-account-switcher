@@ -43,6 +43,7 @@ internal static class Program
             WindowsExistingAmanoProcessAdapterTest.Run(output);
             WindowsAmanoProductionOutboxTest.Run(output);
             WindowsAmanoApprovedDeliveryCoordinatorTest.Run(output);
+            WindowsAmanoConnectivityTest.Run(output);
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
@@ -451,11 +452,92 @@ internal static class Program
             WindowsLocalSenderLeaseTest.Run(output);
             VerifyMonitorPage(output, VerifyOfflineRecoveryInbox(output));
             VerifyTelegramApprovalReviewUi(output);
+            VerifyTelegramConnectivityStageUi(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyTelegramConnectivityStageUi(string output)
+    {
+        var pending = new List<WindowsTelegramApprovalRow>();
+        var stages = 0;
+        var sendCallbacks = 0;
+        var when = new DateTimeOffset(2026, 11, 13, 3, 45, 0, TimeSpan.Zero);
+        var window = new MainWindow(new FixtureClient(),
+            telegramPendingApprovals: () => pending,
+            telegramTestStage: lane =>
+            {
+                stages++;
+                var hex = lane == TelegramNotificationLane.FiveHourRecovery
+                    ? new string('d', 64) : new string('e', 64);
+                if (!pending.Any(item => item.Lane == lane))
+                    pending.Add(new WindowsTelegramApprovalRow(lane, hex, when, true));
+                return "테스트 대기 항목 생성 · 실제 발송 없음";
+            },
+            telegramApprovedSend: (_, _) =>
+            {
+                sendCallbacks++;
+                return Task.FromResult("synthetic callback only");
+            });
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "telegram-test-buttons-available.png"));
+        var five = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "5H 묵음 테스트 항목 생성");
+        var seven = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "7D 일반 알림 테스트 항목 생성");
+        Assert(stages == 0 && sendCallbacks == 0 && five.IsEnabled && seven.IsEnabled,
+            "Showing connectivity options must never stage or send anything.");
+
+        five.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-five-pending.png"));
+        Assert(stages == 1 && sendCallbacks == 0 &&
+            pending.Single().IsTest && pending.Single().LaneLabel.Contains("연결 테스트") &&
+            All<TextBlock>(window).Any(t =>
+                t.Text.Contains("테스트 대기 항목 생성 · 실제 발송 없음")),
+            "5H test click must stage only, not send or impersonate a reset.");
+        five = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "5H 묵음 테스트 항목 생성");
+        five.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-duplicate-ignored.png"));
+        Assert(stages == 2 && pending.Count == 1 && sendCallbacks == 0,
+            "Repeat click must not produce multiple pending tests or Telegram sends.");
+
+        seven = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "7D 일반 알림 테스트 항목 생성");
+        seven.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-both-pending.png"));
+        Assert(stages == 3 && pending.Count == 2 && sendCallbacks == 0,
+            "7D test must stage independently without any auto-send callback.");
+
+        var review = All<Button>(window).First(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토");
+        review.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-review-needs-consent.png"));
+        Assert(window.CurrentPage == "telegram-approve" &&
+            All<TextBlock>(window).Any(t =>
+                t.Text.Contains("테스트 생성")) &&
+            All<Button>(window).Single(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "선택한 알림 1건 실제 Telegram 발송").IsEnabled == false &&
+            sendCallbacks == 0,
+            "Reviewing a TEST still requires separate cross-host and final approval.");
+        window.CloseForExit();
+
+        var unwired = new MainWindow(new FixtureClient());
+        unwired.Navigate("monitor");
+        Render(unwired, Path.Combine(output, "telegram-test-unwired-hidden.png"));
+        Assert(!All<Button>(unwired).Any(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "5H 묵음 테스트 항목 생성"),
+            "No runtime staging callback means no connectivity test UI.");
+        unwired.CloseForExit();
+    }
+
     private static void VerifyTelegramApprovalReviewUi(string output)
     {
         var key = new string('f', 64);

@@ -62,7 +62,7 @@ internal sealed class WindowsAmanoProductionOutbox
             .OrderByDescending(item => item.ObservedAt)
             .Take(10)
             .Select(item => new WindowsTelegramApprovalRow(
-                item.Lane, item.EventKey, item.ObservedAt))
+                item.Lane, item.EventKey, item.ObservedAt, item.IsTest))
             .ToArray();
     }
 
@@ -85,7 +85,8 @@ internal sealed class WindowsAmanoProductionOutbox
         string? eventKey,
         DateTimeOffset observedAt,
         bool matchingPreparedRoute,
-        TelegramNotificationPreferences? preferences)
+        TelegramNotificationPreferences? preferences,
+        bool isTest = false)
     {
         var allow = lane switch
         {
@@ -111,10 +112,48 @@ internal sealed class WindowsAmanoProductionOutbox
                 return false; // no eviction of uncertain or reserved events
             state.Items.Add(new WindowsAmanoOutboxItem(
                 lane, eventKey!, observedAt, DateTimeOffset.UtcNow,
-                WindowsAmanoOutboxStatus.AwaitingApproval, null, null));
+                WindowsAmanoOutboxStatus.AwaitingApproval, null, null, isTest));
             Save(state);
             return true;
         }
+    }
+
+    /// <summary>
+    /// Stages a *clearly labelled* connectivity test, never a false recovery.
+    /// No Telegram invocation or approval is performed here. A random,
+    /// independent event identity ensures no clash with real quota recoveries.
+    /// </summary>
+    internal WindowsTelegramApprovalRow? StageConnectivityTest(
+        TelegramNotificationLane lane,
+        TelegramNotificationPreferences? preferences,
+        DateTimeOffset observedAt,
+        bool reviewedBotRouteAvailable)
+    {
+        var allowed = lane switch
+        {
+            TelegramNotificationLane.FiveHourRecovery =>
+                preferences?.Normalize().WantsFiveHour == true,
+            TelegramNotificationLane.WeeklyRecovery =>
+                preferences?.Normalize().WantsWeekly == true,
+            _ => false
+        };
+        if (!allowed || !reviewedBotRouteAvailable || observedAt == default)
+            return null;
+
+        // Reopening the test screen is not a request to queue unlimited
+        // messages. Reuse an outstanding test for this lane until consumed.
+        var existing = Read().FirstOrDefault(item =>
+            item.Lane == lane && item.IsTest &&
+            item.Status == WindowsAmanoOutboxStatus.AwaitingApproval);
+        if (existing is not null)
+            return new WindowsTelegramApprovalRow(
+                existing.Lane, existing.EventKey, existing.ObservedAt, true);
+        var key = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator
+            .GetBytes(32)).ToLowerInvariant();
+        return Stage(lane, key, observedAt,
+            matchingPreparedRoute: true, preferences, isTest: true)
+            ? new WindowsTelegramApprovalRow(lane, key, observedAt, true)
+            : null;
     }
 
     /// <summary>
@@ -275,7 +314,8 @@ internal sealed record WindowsAmanoOutboxItem(
     DateTimeOffset CreatedAt,
     WindowsAmanoOutboxStatus Status,
     string? AttemptToken,
-    long? TelegramMessageId);
+    long? TelegramMessageId,
+    bool IsTest = false);
 
 internal sealed class WindowsAmanoOutboxState
 {
@@ -290,8 +330,12 @@ internal sealed class WindowsAmanoOutboxState
 public sealed record WindowsTelegramApprovalRow(
     TelegramNotificationLane Lane,
     string EventKey,
-    DateTimeOffset ObservedAt)
+    DateTimeOffset ObservedAt,
+    bool IsTest = false)
 {
-    public string LaneLabel => Lane == TelegramNotificationLane.FiveHourRecovery
-        ? "5H · 기존 모니터 봇(묵음)" : "7D · 기존 얼럿 봇";
+    public string LaneLabel => IsTest
+        ? Lane == TelegramNotificationLane.FiveHourRecovery
+            ? "5H · 모니터 봇 연결 테스트(묵음)" : "7D · 얼럿 봇 연결 테스트"
+        : Lane == TelegramNotificationLane.FiveHourRecovery
+            ? "5H · 기존 모니터 봇(묵음)" : "7D · 기존 얼럿 봇";
 }

@@ -29,7 +29,7 @@ internal static class WindowsPackagedTelegramScriptsTest
         File.Copy(Path.Combine(source, WindowsPackagedTelegramScripts.AlertScriptName), alert);
         var intact = WindowsPackagedTelegramScripts.Inspect(host);
         Check(intact.BothVerified && !intact.ActualTelegramSendAuthorized &&
-            intact.Display.Contains("실제 발송: 차단", StringComparison.Ordinal),
+            intact.Display.Contains("자동 발송: 차단 · 수동 1건 승인 필요", StringComparison.Ordinal),
             "Both pinned scripts are required, but never grant a sender permit.");
 
         File.AppendAllText(alert, "#tampered-fixture");

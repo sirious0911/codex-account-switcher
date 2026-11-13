@@ -72,5 +72,5 @@ public sealed record WindowsPackagedTelegramScriptInspection(
         (MonitorVerified ? "SHA256 확인" : "미확인") +
         " | 7D 얼럿 스크립트: " +
         (AlertVerified ? "SHA256 확인" : "미확인") +
-        " | 실제 발송: 차단";
+        " | 자동 발송: 차단 · 수동 1건 승인 필요";
 }

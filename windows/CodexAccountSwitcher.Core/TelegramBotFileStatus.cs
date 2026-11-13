@@ -42,5 +42,5 @@ public sealed record TelegramBotFileStatus(
         "5H 모니터 봇 파일: " + (MonitorBotFilesPresent ? "확인" : "미확인") +
         " | 7D 얼럿 봇 파일: " + (AlertBotFilesPresent ? "확인" : "미확인") +
         " | 수신 대상 파일: " + (ChatDestinationPresent ? "확인" : "미확인") +
-        " | 실제 전송: 미연결 (내용·토큰 미조회)";
+        " | 메타데이터만 확인 (내용·토큰 미조회, 전송 승인 아님)";
 }

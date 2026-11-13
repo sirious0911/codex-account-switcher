@@ -332,6 +332,16 @@ internal static class Program
                     "기존 Telegram 봇 폴더 선택·저장 (읽기 전용 확인)");
             Assert(existingBot is not null,
                 "Settings must let the user persist the bot folder selection.");
+            var localSuggestedBot = NativeSettings.FindExistingAmanoBotDirectory(
+                @"C:\Codex\projects");
+            var botAlreadyLinked = new NativeSettings().TelegramBotDirectory;
+            var expectedQuickLink = localSuggestedBot is not null &&
+                !string.Equals(localSuggestedBot, botAlreadyLinked,
+                    StringComparison.OrdinalIgnoreCase);
+            Assert(All<Button>(window).Any(button =>
+                    System.Windows.Automation.AutomationProperties.GetName(button) ==
+                        "기존 인천공항 주차대행 Telegram 봇 연결") == expectedQuickLink,
+                "One-click bot linking appears only when complete existing bot files are found.");
             Assert(All<TextBlock>(window).Any(text =>
                 text.Text.StartsWith("기존 Telegram 봇 폴더:", StringComparison.Ordinal)),
                 "Settings must show stored/unset bot directory status without raw tokens.");
@@ -357,8 +367,29 @@ internal static class Program
                 File.WriteAllText(Path.Combine(botFixture, filename), "fixture-only");
             var foundBot = TelegramBotFileStatus.Inspect(botFixture);
             Assert(foundBot.MonitorBotFilesPresent && foundBot.AlertBotFilesPresent &&
-                foundBot.ChatDestinationPresent && foundBot.Display.Contains("실제 전송: 미연결"),
+                foundBot.ChatDestinationPresent && foundBot.Display.Contains("메타데이터만 확인"),
                 "Both bot lanes require metadata presence without authorizing any Telegram send.");
+            var registryBotBeforeDiscovery = new NativeSettings().TelegramBotDirectory;
+            var syntheticRoot = Path.Combine(output, "existing-amano-autodetect-fixture");
+            var syntheticAmano = Path.Combine(syntheticRoot,
+                "_tools", "web-monitor", "amano");
+            Assert(NativeSettings.FindExistingAmanoBotDirectory(syntheticRoot) is null,
+                "A missing Amano folder must never auto-configure the Windows app.");
+            Directory.CreateDirectory(syntheticAmano);
+            foreach (var file in new[] { "send-telegram-health.ps1",
+                     "telegram-health-token.dpapi", "send-telegram-alert.ps1",
+                     "telegram-token.dpapi", "telegram-chat-id.txt" })
+                File.WriteAllText(Path.Combine(syntheticAmano, file), "synthetic-only");
+            Assert(NativeSettings.FindExistingAmanoBotDirectory(syntheticRoot) ==
+                    Path.GetFullPath(syntheticAmano),
+                "Read-only suggestion must detect all five existing Amano bot artifacts.");
+            File.Delete(Path.Combine(syntheticAmano, "telegram-token.dpapi"));
+            Assert(NativeSettings.FindExistingAmanoBotDirectory(syntheticRoot) is null,
+                "Missing legacy alert token must hide the one-click suggestion.");
+            Assert(string.Equals(registryBotBeforeDiscovery,
+                    new NativeSettings().TelegramBotDirectory,
+                    StringComparison.OrdinalIgnoreCase),
+                "Read-only bot discovery must not change the existing Registry selection.");
             File.WriteAllText(Path.Combine(botFixture, "telegram-health-token.dpapi"), "");
             Assert(!TelegramBotFileStatus.Inspect(botFixture).MonitorBotFilesPresent &&
                 TelegramBotFileStatus.Inspect(botFixture).AlertBotFilesPresent,
@@ -369,11 +400,11 @@ internal static class Program
             Assert(telegramStatus is not null &&
                 telegramStatus.Text.Contains(Environment.MachineName, StringComparison.Ordinal) &&
                 telegramStatus.Text.Contains(telegramPreferences.DeviceRole ==
-                    TelegramNotificationDeviceRole.Sender ? "Sender 요청(미승인)" : "Viewer",
+                    TelegramNotificationDeviceRole.Sender ? "Sender 선택(1건 수동 승인 필요)" : "Viewer",
                     StringComparison.Ordinal) &&
                 telegramStatus.Text.Contains(telegramPreferences.NotificationsRequested ?
                     "ON(요청)" : "OFF", StringComparison.Ordinal) &&
-                telegramStatus.Text.Contains("실제 Telegram 발송: 미연결",
+                telegramStatus.Text.Contains("실제 Telegram 발송: 대기 이벤트를 선택하고 2단계 확인해야 1건씩 가능",
                     StringComparison.Ordinal),
                 "Isolated WPF settings must display device, role, alert request and disabled delivery.");
             var fiveHour = All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == "显示 5 小时用量");

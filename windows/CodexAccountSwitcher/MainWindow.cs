@@ -774,7 +774,7 @@ public sealed class MainWindow : Window
         telegramHeading.Margin = new Thickness(0, 20, 0, 0);
         settings.Children.Add(telegramHeading);
         var telegram = native.TelegramPreferences;
-        var telegramRoles = new[] { "Viewer — 사용량 표시만", "Sender — 이 PC 발송 담당(예정)" };
+        var telegramRoles = new[] { "Viewer — 사용량 표시만", "Sender — 이 PC에서 1건 수동 승인 발송" };
         var telegramRole = new ComboBox {
             Width = 235, VerticalAlignment = VerticalAlignment.Center,
             ItemsSource = telegramRoles,
@@ -808,16 +808,16 @@ public sealed class MainWindow : Window
                 WeeklyRequested = requested
             }));
         var selectedRole = telegram.DeviceRole == TelegramNotificationDeviceRole.Sender
-            ? "Sender 요청(미승인)" : "Viewer";
+            ? "Sender 선택(1건 수동 승인 필요)" : "Viewer";
         var requestedAlerts = telegram.NotificationsRequested ? "ON(요청)" : "OFF";
         var telegramState = Text(
             "이 기기: " + Environment.MachineName +
             " | 저장된 역할: " + selectedRole +
             " | 알림 요청: " + requestedAlerts +
-            " | 실제 Telegram 발송: 미연결. " +
+            " | 실제 Telegram 발송: 대기 이벤트를 선택하고 2단계 확인해야 1건씩 가능. " +
             "역할과 알림 설정은 이 PC에 저장되며 앱 재시작 후에도 유지됩니다. " +
             "Sender를 선택해도 다른 PC의 Sender가 자동 중지되지 않습니다. " +
-            "단일 발송자 확인·전송 검증 전까지 메시지는 발송되지 않습니다.",
+            "설정에서 알림 ON만 선택해도 자동 발송되지 않습니다.",
             10.5, muted: true);
         telegramState.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(telegramState);
@@ -840,6 +840,46 @@ public sealed class MainWindow : Window
             10.5, muted: true);
         savedBotStatus.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(savedBotStatus);
+        // Detect the existing Amano booking bot on this personal Windows PC.
+        // The user must explicitly confirm before persisting the path. All
+        // Telegram sender/notification toggles remain unchanged and OFF by default.
+        var detectedAmano = NativeSettings.FindExistingAmanoBotDirectory(
+            @"C:\Codex\projects");
+        if (detectedAmano is not null &&
+            !string.Equals(savedBotDirectory, detectedAmano,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var linkExistingBot = Button("기존 인천공항 주차대행 Telegram 봇 연결", () => {
+                var currentCandidate = NativeSettings.FindExistingAmanoBotDirectory(
+                    @"C:\Codex\projects");
+                if (currentCandidate is null ||
+                    !string.Equals(currentCandidate, detectedAmano,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    localError = "기존 주차대행 봇 파일 확인 실패 · 설정 변경 없음";
+                    Render();
+                    return;
+                }
+                if (MessageBox.Show(this,
+                    "기존 주차대행 Telegram 봇 폴더만 이 앱에 등록합니다." +
+                    Environment.NewLine +
+                    "기존 주차대행 프로그램·봇 토큰·수신 대상은 변경하지 않습니다." +
+                    Environment.NewLine +
+                    "Telegram Sender 또는 알림 ON 설정도 변경하지 않습니다." +
+                    Environment.NewLine + "이 폴더를 연결하시겠습니까?",
+                    "기존 Telegram 봇 연결 확인", MessageBoxButton.YesNo,
+                    MessageBoxImage.Question, MessageBoxResult.No) !=
+                    MessageBoxResult.Yes)
+                    return;
+                try { native.SetTelegramBotDirectory(currentCandidate); Render(); }
+                catch (Exception ex) {
+                    localError = "기존 봇 연결 실패: " + ex.GetType().Name;
+                    Render();
+                }
+            });
+            linkExistingBot.Margin = new Thickness(0, 8, 0, 0);
+            settings.Children.Add(linkExistingBot);
+        }
         var botFileCheck = Button("기존 Telegram 봇 폴더 선택·저장 (읽기 전용 확인)", () => {
             using var picker = new System.Windows.Forms.FolderBrowserDialog {
                 Description = "기존 Telegram 봇 설정 파일이 있는 로컬 폴더를 선택하세요.",

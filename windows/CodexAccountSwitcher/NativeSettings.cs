@@ -43,7 +43,7 @@ public sealed class NativeSettings
         set { using var key = Registry.CurrentUser.CreateSubKey(Key); key.SetValue("AutomaticallyCheckUpdates", value ? 1 : 0); }
     }
     // These four Windows preferences are per-device UI intent only.
-    // The installed application intentionally has no Telegram send transport.
+    // Only an explicit, double-confirmed approval of an exact pending event can invoke Telegram.
     public TelegramNotificationPreferences TelegramPreferences
     {
         get
@@ -106,6 +106,33 @@ public sealed class NativeSettings
             key.SetValue("TelegramBotDirectory", normalized,
                 RegistryValueKind.String);
         Changed?.Invoke();
+    }
+
+    // Optional *read-only* discovery of this personal fork's existing Amano
+    // installation. It does not open any credential or modify the Registry.
+    // Merely discovering a folder never enables Telegram sends.
+    public static string? FindExistingAmanoBotDirectory(string projectsRoot)
+    {
+        if (string.IsNullOrWhiteSpace(projectsRoot) ||
+            !System.IO.Path.IsPathFullyQualified(projectsRoot))
+            return null;
+        try
+        {
+            var candidate = System.IO.Path.Combine(projectsRoot,
+                "_tools", "web-monitor", "amano");
+            var approvedPath = NormalizeTelegramBotDirectory(candidate);
+            if (approvedPath is null) return null;
+            var files = TelegramBotFileStatus.Inspect(approvedPath);
+            return files.MonitorBotFilesPresent &&
+                files.AlertBotFilesPresent && files.ChatDestinationPresent
+                    ? approvedPath : null;
+        }
+        catch (Exception ex) when (ex is System.IO.IOException or
+            UnauthorizedAccessException or ArgumentException or
+            NotSupportedException or System.Security.SecurityException)
+        {
+            return null;
+        }
     }
 
     // Never allow UNC/remote shares, drive roots, or reparse points for bot

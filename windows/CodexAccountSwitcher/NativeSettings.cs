@@ -43,7 +43,8 @@ public sealed class NativeSettings
         set { using var key = Registry.CurrentUser.CreateSubKey(Key); key.SetValue("AutomaticallyCheckUpdates", value ? 1 : 0); }
     }
     // These four Windows preferences are per-device UI intent only.
-    // Only an explicit, double-confirmed approval of an exact pending event can invoke Telegram.
+    // A sender process requires an additional, explicit per-event approval
+    // or a separate, nonpersistent automatic-send session consent.
     public TelegramNotificationPreferences TelegramPreferences
     {
         get

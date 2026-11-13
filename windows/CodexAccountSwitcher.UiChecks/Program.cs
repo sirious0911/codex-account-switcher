@@ -44,6 +44,8 @@ internal static class Program
             WindowsAmanoProductionOutboxTest.Run(output);
             WindowsAmanoApprovedDeliveryCoordinatorTest.Run(output);
             WindowsAmanoConnectivityTest.Run(output);
+            WindowsTelegramAutoSendSessionTest.Run(output);
+            WindowsTelegramAutoRecoveryDispatcherTest.Run(output);
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
@@ -63,6 +65,8 @@ internal static class Program
                 "Windows app must own the session-local Telegram mutex lifecycle.");
             Assert(appFields.Any(f => f.FieldType == typeof(WindowsAmanoProductionOutbox)),
                 "Windows app must own the durable Telegram approval queue.");
+            Assert(appFields.Any(f => f.FieldType == typeof(WindowsTelegramAutoSendSession)),
+                "Windows app must use the default-OFF, process-only automatic send consent.");
             Assert(appFields.Any(f => f.FieldType == typeof(AdaptiveUsageRefreshService)),
                 "Adaptive work polling must be owned by the same Windows app, not a second process.");
             // Metadata-only recent-session detection: never inspect login or transcript bytes.
@@ -453,11 +457,86 @@ internal static class Program
             VerifyMonitorPage(output, VerifyOfflineRecoveryInbox(output));
             VerifyTelegramApprovalReviewUi(output);
             VerifyTelegramConnectivityStageUi(output);
+            VerifyTelegramAutomaticSessionUi(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyTelegramAutomaticSessionUi(string output)
+    {
+        var armed = false;
+        var actions = 0;
+        var window = new MainWindow(new FixtureClient(),
+            telegramAutoArmed: () => armed,
+            telegramAutoAction: (turnOn, otherHostsOff) =>
+            {
+                actions++;
+                if (turnOn && !otherHostsOff)
+                    throw new InvalidOperationException("Missing external-host confirmation.");
+                armed = turnOn;
+                return true;
+            });
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "telegram-auto-default-off.png"));
+        var autoButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "이번 실행에서 복구 알림 자동 발송 활성화");
+        var otherHost = All<CheckBox>(window).Single(box =>
+            System.Windows.Automation.AutomationProperties.GetName(box) ==
+                "자동 Telegram 다른 장치 OFF 직접 확인");
+        Assert(!armed && !autoButton.IsEnabled && otherHost.IsChecked == false &&
+            actions == 0 &&
+            All<TextBlock>(window).Any(t =>
+                t.Text.Contains("자동 송신 OFF · 사용자가 이번 실행에서 직접 활성화해야 합니다.")),
+            "Auto-send OFF must be visible and its enable action disabled on startup.");
+
+        otherHost.IsChecked = true;
+        Assert(autoButton.IsEnabled && !armed && actions == 0,
+            "Checking other hosts is not sufficient to arm without final Yes consent.");
+        otherHost.IsChecked = false;
+        Assert(!autoButton.IsEnabled && !armed && actions == 0,
+            "Unchecking remote device acknowledgment must immediately disable arming.");
+        window.CloseForExit();
+
+        armed = true; // Synthetic UI state for testing the always-available OFF action.
+        var stopWindow = new MainWindow(new FixtureClient(),
+            telegramAutoArmed: () => armed,
+            telegramAutoAction: (turnOn, otherHostsOff) =>
+            {
+                actions++;
+                armed = turnOn;
+                return true;
+            });
+        stopWindow.Navigate("settings");
+        Render(stopWindow, Path.Combine(output, "telegram-auto-session-armed-fake.png"));
+        var stop = All<Button>(stopWindow).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "이번 실행의 자동 Telegram 발송 중지");
+        Assert(stop.IsEnabled && armed &&
+            !All<CheckBox>(stopWindow).Any(box =>
+                System.Windows.Automation.AutomationProperties.GetName(box) ==
+                    "자동 Telegram 다른 장치 OFF 직접 확인"),
+            "An active session must offer direct stop without another approval dialog.");
+        stop.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(stopWindow, Path.Combine(output, "telegram-auto-stopped-fake.png"));
+        Assert(!armed && actions == 1 &&
+            All<Button>(stopWindow).Single(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "이번 실행에서 복구 알림 자동 발송 활성화").IsEnabled == false,
+            "STOP must immediately disarm the session without sending any message.");
+        stopWindow.CloseForExit();
+
+        var unwired = new MainWindow(new FixtureClient());
+        unwired.Navigate("settings");
+        Render(unwired, Path.Combine(output, "telegram-auto-unwired.png"));
+        Assert(!All<Button>(unwired).Any(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "이번 실행에서 복구 알림 자동 발송 활성화"),
+            "No auto-send callback must mean no executable auto-send UI.");
+        unwired.CloseForExit();
+    }
+
     private static void VerifyTelegramConnectivityStageUi(string output)
     {
         var pending = new List<WindowsTelegramApprovalRow>();

@@ -27,6 +27,8 @@ public sealed class MainWindow : Window
     private readonly Func<IReadOnlyList<WindowsTelegramApprovalRow>> pendingTelegramApprovals;
     private readonly Func<WindowsTelegramApprovalRow, bool, Task<string>>? approvedTelegramSender;
     private readonly Func<TelegramNotificationLane, string>? telegramConnectivityTestStager;
+    private readonly Func<bool> telegramAutomaticSessionArmed;
+    private readonly Func<bool, bool, bool>? telegramAutomaticSessionAction;
     private WindowsTelegramApprovalRow? selectedTelegramApproval;
     private string? telegramApprovalResult;
     private bool telegramApprovalBusy;
@@ -61,7 +63,9 @@ public sealed class MainWindow : Window
         Func<string>? productionTelegramOutboxStatus = null,
         Func<IReadOnlyList<WindowsTelegramApprovalRow>>? telegramPendingApprovals = null,
         Func<WindowsTelegramApprovalRow, bool, Task<string>>? telegramApprovedSend = null,
-        Func<TelegramNotificationLane, string>? telegramTestStage = null)
+        Func<TelegramNotificationLane, string>? telegramTestStage = null,
+        Func<bool>? telegramAutoArmed = null,
+        Func<bool, bool, bool>? telegramAutoAction = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
@@ -77,6 +81,8 @@ public sealed class MainWindow : Window
         pendingTelegramApprovals = telegramPendingApprovals ?? (() => []);
         approvedTelegramSender = telegramApprovedSend;
         telegramConnectivityTestStager = telegramTestStage;
+        telegramAutomaticSessionArmed = telegramAutoArmed ?? (() => false);
+        telegramAutomaticSessionAction = telegramAutoAction;
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -836,6 +842,77 @@ public sealed class MainWindow : Window
             requested => native.SetTelegramPreferences(native.TelegramPreferences with {
                 WeeklyRequested = requested
             }));
+        var autoLabel = Text("5H·7D 복구 후 자동 Telegram 발송 (현재 실행 세션 한정)",
+            12, bold: true);
+        autoLabel.Margin = new Thickness(0, 18, 0, 4);
+        settings.Children.Add(autoLabel);
+        var autoArmed = telegramAutomaticSessionArmed();
+        var autoInfo = Text(autoArmed
+            ? "자동 송신 ON (이번 실행만) · 새 복구 이벤트만 1회 전송 · 재시작 시 OFF"
+            : "자동 송신 OFF · 사용자가 이번 실행에서 직접 활성화해야 합니다.",
+            10.5, muted: true);
+        autoInfo.TextWrapping = TextWrapping.Wrap;
+        settings.Children.Add(autoInfo);
+        var autoWarning = Text(
+            "다른 Windows/Mac의 송신 중지는 앱이 자동으로 검증하지 못합니다. " +
+            "본인 확인 후에만 활성화하세요. 이번 실행 이전의 대기 알림이나 " +
+            "연결 테스트는 자동 전송하지 않습니다.",
+            10.5, muted: true);
+        autoWarning.TextWrapping = TextWrapping.Wrap;
+        settings.Children.Add(autoWarning);
+        if (telegramAutomaticSessionAction is not null)
+        {
+            var confirmedOtherHosts = new CheckBox {
+                Content = "다른 PC/Mac Telegram 송신이 OFF임을 직접 확인",
+                IsChecked = false,
+                FontSize = 11,
+                Margin = new Thickness(0, 8, 0, 8)
+            };
+            AutomationProperties.SetName(confirmedOtherHosts,
+                "자동 Telegram 다른 장치 OFF 직접 확인");
+            if (!autoArmed) settings.Children.Add(confirmedOtherHosts);
+            var toggleAutomatic = Button(autoArmed
+                ? "이번 실행의 자동 Telegram 발송 중지"
+                : "이번 실행에서 복구 알림 자동 발송 활성화", () => { });
+            toggleAutomatic.IsEnabled = autoArmed;
+            if (!autoArmed)
+            {
+                confirmedOtherHosts.Checked += (_, _) =>
+                    toggleAutomatic.IsEnabled = true;
+                confirmedOtherHosts.Unchecked += (_, _) =>
+                    toggleAutomatic.IsEnabled = false;
+            }
+            toggleAutomatic.Click += (_, _) => {
+                var enabling = !autoArmed;
+                if (enabling)
+                {
+                    if (confirmedOtherHosts.IsChecked != true) return;
+                    var consent = MessageBox.Show(this,
+                        "이 앱 실행 세션에서 새로 확인된 5H·7D 100% 복구 이벤트가 " +
+                        "기존 Telegram 봇으로 자동 전송됩니다." +
+                        Environment.NewLine +
+                        "다른 PC/Mac에서 송신이 꺼져 있음을 직접 확인했으며, " +
+                        "이 PC만 Sender로 운용하는 데 동의합니까?" +
+                        Environment.NewLine +
+                        "실제 메시지는 별도 이벤트별 재확인 없이 전송될 수 있습니다.",
+                        "Telegram 자동 발송 활성화 최종 확인",
+                        MessageBoxButton.YesNo, MessageBoxImage.Warning,
+                        MessageBoxResult.No);
+                    if (consent != MessageBoxResult.Yes) return;
+                }
+                var completed = telegramAutomaticSessionAction(
+                    enabling, enabling && confirmedOtherHosts.IsChecked == true);
+                localError = completed
+                    ? enabling
+                        ? "자동 Telegram 송신: 현재 실행 세션만 ON"
+                        : "자동 Telegram 송신: OFF"
+                    : "자동 송신 조건 미충족 · 기존 봇 연결/Sender/알림 설정 확인 필요";
+                Render();
+            };
+            toggleAutomatic.Margin = new Thickness(0, 4, 0, 6);
+            settings.Children.Add(toggleAutomatic);
+        }
+
         var selectedRole = telegram.DeviceRole == TelegramNotificationDeviceRole.Sender
             ? "Sender 선택(1건 수동 승인 필요)" : "Viewer";
         var requestedAlerts = telegram.NotificationsRequested ? "ON(요청)" : "OFF";

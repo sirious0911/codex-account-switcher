@@ -3,8 +3,9 @@ namespace CodexAccountSwitcher.Core;
 /// <summary>
 /// Joins a persisted production reservation to the reviewed Windows Telegram
 /// subprocess adapter. Only an explicit, exact-event UI consent and verified
-/// sole-sender ownership may call this in a future approved production build.
-/// Current App.xaml.cs neither constructs nor invokes this class.
+/// local sender claim may call this for an exact-event manual approval or
+/// a separately, explicitly armed automatic Windows session. It cannot prove
+/// that a different Windows/Mac host is not sending.
 /// </summary>
 internal sealed class WindowsAmanoApprovedDeliveryCoordinator
 {

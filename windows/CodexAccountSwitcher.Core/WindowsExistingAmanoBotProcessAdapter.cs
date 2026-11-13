@@ -7,8 +7,9 @@ namespace CodexAccountSwitcher.Core;
 /// <summary>
 /// Real Windows PowerShell 5.1 process transport for the previously-reviewed
 /// Codex-specific scripts that reuse Amano bot credentials in place.
-/// NOT wired into the running app. An external, durable production send
-/// reservation, explicit send consent and sole-sender proof are prerequisites.
+/// Only reachable after a durable production send reservation and either
+/// exact-event manual confirmation or explicitly armed in-memory auto consent.
+/// Other Windows/Mac senders must be manually confirmed OFF by the user.
 /// </summary>
 internal sealed class WindowsExistingAmanoBotProcessAdapter
 {

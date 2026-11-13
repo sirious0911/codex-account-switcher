@@ -33,7 +33,8 @@ public sealed record TelegramNotificationPreferences(
         NotificationsRequested && WeeklyRequested;
 
     // A local setting is not proof that all other hosts are stopped.
-    // This revision exposes no live sender transport; this property
-    // deliberately remains false regardless of selected preferences.
+    // No saved preference alone grants Telegram delivery authority.
+    // Manual per-event or explicit in-memory auto-session consent is required.
+    // This property remains false independently of UI/user session state.
     public bool ActualTelegramDeliveryAuthorized => false;
 }

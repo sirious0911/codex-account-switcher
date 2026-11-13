@@ -55,6 +55,8 @@ public partial class App : Application
     private FiveHour100RecoveryWorker? fiveHour100Worker;
     private WindowsAmanoProductionOutbox? telegramOutbox;
     private WindowsTelegramLocalSenderLease? localTelegramSender;
+    private readonly WindowsTelegramAutoSendSession autoTelegramSession = new();
+    private WindowsTelegramAutoRecoveryDispatcher? autoTelegramDispatcher;
     private NativeSettings? nativeSettings;
     private string? bundledTelegramHostPath;
     private string existingAmanoBotRouteStatus =
@@ -101,6 +103,9 @@ public partial class App : Application
             weekly100Worker = new Weekly100RecoveryWorker(dataPath);
             fiveHour100Worker = new FiveHour100RecoveryWorker(dataPath);
             telegramOutbox = new WindowsAmanoProductionOutbox(dataPath);
+            autoTelegramDispatcher = new WindowsTelegramAutoRecoveryDispatcher(
+                autoTelegramSession, telegramOutbox,
+                WindowsExistingAmanoBotProcessAdapter.CreateWindowsTransport());
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
             var native = new NativeSettings();
@@ -125,7 +130,9 @@ public partial class App : Application
                     "운영 알림 대기함: 확인 불가 · 실제 발송 차단",
                 ReadPendingTelegramApprovalRows,
                 SendApprovedTelegramOnceAsync,
-                QueueTelegramConnectivityTest); MainWindow = window;
+                QueueTelegramConnectivityTest,
+                () => autoTelegramSession.Armed,
+                ChangeAutomaticTelegramSession); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -158,6 +165,9 @@ public partial class App : Application
             Dispatcher.BeginInvoke(new Action(RefreshLocalTelegramSender));
             return;
         }
+        // Any preference/folder setting notification disarms an existing
+        // session. A stale cross-host confirmation must never auto-resume.
+        autoTelegramSession.Disarm();
         // Local session mutex only. No credential read or sender transport.
         localTelegramSender.Update(nativeSettings.TelegramPreferences);
     }
@@ -236,6 +246,8 @@ public partial class App : Application
     {
         // The already-running Amano scripts and their bot credentials are
         // untouched. Preparing a Codex-specific route never starts a process.
+        // Only a separately armed in-memory session may auto-dispatch a new
+        // real reset after a durable production outbox stage.
         var isFiveHour = lane == TelegramNotificationLane.FiveHourRecovery;
         var preferences = nativeSettings?.TelegramPreferences;
         if (preferences is null ||
@@ -254,8 +266,12 @@ public partial class App : Application
         if (route is not null)
         {
             try {
-                telegramOutbox?.Stage(lane, eventKey, observedAt,
-                    matchingPreparedRoute: true, preferences);
+                var staged = telegramOutbox?.Stage(lane, eventKey, observedAt,
+                    matchingPreparedRoute: true, preferences) == true;
+                if (staged && autoTelegramSession.AllowsNewRecovery(
+                        lane, isTest: false, preferences, localTelegramSender))
+                    _ = DeliverNewRecoveryAutomaticallyAsync(
+                        lane, eventKey, observedAt);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                 or InvalidDataException or System.Text.Json.JsonException) {
@@ -267,7 +283,81 @@ public partial class App : Application
                     "Telegram production outbox unavailable: " + ex.GetType().Name);
             }
         }
-        // No invocation, approval flags, DPAPI reads, or Telegram network.
+        // Nothing is sent by route creation itself. Automatic dispatch
+        // is explicitly gated, separate, and disabled by default.
+    }
+
+    private bool ChangeAutomaticTelegramSession(
+        bool enable, bool userConfirmedOtherHostsOff)
+    {
+        // Invoked only from a WPF UI click. Never from saved preferences,
+        // startup, background update, the detector or app CLI flags.
+        if (!Dispatcher.CheckAccess() || exiting || nativeSettings is null ||
+            localTelegramSender is null || bundledTelegramHostPath is null)
+            return false;
+
+        autoTelegramSession.Disarm();
+        if (!enable) return true;
+        if (!userConfirmedOtherHostsOff) return false;
+
+        var preferences = nativeSettings.TelegramPreferences;
+        if (localTelegramSender.Update(preferences) !=
+            WindowsLocalSenderLeaseState.LocalClaimHeld)
+            return false;
+
+        var now = DateTimeOffset.UtcNow;
+        var botDirectory = nativeSettings.TelegramBotDirectory;
+        var lanes = new[] {
+            TelegramNotificationLane.FiveHourRecovery,
+            TelegramNotificationLane.WeeklyRecovery
+        };
+        foreach (var lane in lanes)
+        {
+            var enabled = lane == TelegramNotificationLane.FiveHourRecovery
+                ? preferences.WantsFiveHour : preferences.WantsWeekly;
+            if (!enabled) continue;
+            var route = WindowsExistingAmanoBotRoute.Prepare(
+                bundledTelegramHostPath, botDirectory,
+                lane, new string('0', 64), now);
+            if (route is null ||
+                !WindowsExistingAmanoBotProcessAdapter.ValidRoute(route))
+                return false;
+        }
+        return autoTelegramSession.Arm(
+            explicitSessionConsent: true,
+            userConfirmedOtherHostsOff: true,
+            preferences, localTelegramSender,
+            configuredBotVerified: true);
+    }
+
+    private async Task DeliverNewRecoveryAutomaticallyAsync(
+        TelegramNotificationLane lane, string eventKey,
+        DateTimeOffset observedAt)
+    {
+        // Only a newly committed REAL quota recovery event enters. Pending
+        // records from previous runs and all connectivity tests cannot replay.
+        try
+        {
+            if (exiting || !Dispatcher.CheckAccess() ||
+                autoTelegramDispatcher is null ||
+                nativeSettings is null || localTelegramSender is null)
+                return;
+            var result = await autoTelegramDispatcher.DeliverNewlyStagedAsync(
+                lane, eventKey, observedAt, wasJustStaged: true,
+                nativeSettings.TelegramPreferences, localTelegramSender,
+                bundledTelegramHostPath, nativeSettings.TelegramBotDirectory);
+            System.Diagnostics.Trace.TraceInformation(
+                "Telegram recovery automatic result: " + result.Status);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidDataException or System.Text.Json.JsonException or
+            System.Security.SecurityException or InvalidOperationException)
+        {
+            // No automatic retry: a durable reservation might be uncertain.
+            autoTelegramSession.Disarm();
+            System.Diagnostics.Trace.TraceWarning(
+                "Auto Telegram delivery stopped: " + ex.GetType().Name);
+        }
     }
 
     private IReadOnlyList<WindowsTelegramApprovalRow> ReadPendingTelegramApprovalRows()
@@ -466,7 +556,9 @@ public partial class App : Application
     }
     private async Task QuitAsync() {
         if (exiting || window?.IsBusy == true) return;
-        exiting = true; updates?.Stop();
+        exiting = true;
+        autoTelegramSession.Disarm();
+        updates?.Stop();
         syntheticV2Runtime?.Dispose();
         syntheticV2Publisher?.Dispose();
         adaptiveUsage?.Dispose();
@@ -514,6 +606,7 @@ public partial class App : Application
         Shutdown(exitCode);
     }
     protected override void OnExit(ExitEventArgs e) {
+        autoTelegramSession.Disarm();
         SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         taskbarPanel?.Dispose();
         if (nativeSettings is not null)

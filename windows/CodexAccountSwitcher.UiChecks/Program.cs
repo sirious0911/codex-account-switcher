@@ -40,6 +40,7 @@ internal static class Program
             TelegramSenderScriptContractTest.Run();
             WindowsPackagedTelegramScriptsTest.Run(output);
             WindowsExistingAmanoBotRouteTest.Run(output);
+            WindowsExistingAmanoProcessAdapterTest.Run(output);
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(

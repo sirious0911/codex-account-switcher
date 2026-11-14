@@ -33,6 +33,8 @@ struct MenuBarPopover: View {
                     SettingsView(model: model, updater: updater) {
                         page = .accounts
                     }
+                case .monitor:
+                    monitorPage
                 case let .confirmSwitch(account):
                     SwitchConfirmationPage(
                         model: model,
@@ -134,6 +136,14 @@ struct MenuBarPopover: View {
                 .disabled(model.isMutating || updater.isInstalling)
 
                 FooterAction(
+                    title: model.text("monitor_title"),
+                    systemImage: "chart.bar.xaxis"
+                ) {
+                    page = .monitor
+                }
+                .disabled(model.isMutating)
+
+                FooterAction(
                     title: model.text("settings"),
                     systemImage: "gearshape"
                 ) {
@@ -151,6 +161,84 @@ struct MenuBarPopover: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
+        }
+    }
+
+    private var monitorPage: some View {
+        VStack(spacing: 0) {
+            PopoverHeader(title: model.text("monitor_title"),
+                          backTitle: model.text("back")) { page = .accounts }
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(model.text("monitor_source_hint"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    MacRemoteQuotaPanel(viewer: model.remoteQuotaViewer)
+                    Divider()
+                    if model.accounts.isEmpty {
+                        Text(model.text("no_accounts"))
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.accounts) { account in
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(account.email ?? account.displayName)
+                                .fontWeight(.medium)
+                            if let usage = model.usageStates[account.id]?.displayedUsage {
+                                Text(model.text("five_hour") + ": " +
+                                    (usage.fiveHourRemainingPercent.map { "\($0)%" } ?? model.text("unknown")))
+                                Text(model.text("weekly") + ": \(usage.remainingPercent)%")
+                                Text(model.text("reset_credits") + ": " +
+                                    (usage.resetCreditsRemaining.map(String.init) ?? model.text("unknown")))
+                            } else {
+                                Text(model.text("usage_unavailable"))
+                            }
+                            if model.usageStates[account.id]?.refreshError != nil {
+                                Text(model.text("monitor_last_known"))
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.system(size: 12))
+                        .padding(.vertical, 5)
+                    }
+                    Divider()
+                    Text(model.text("monitor_history"))
+                        .font(.system(size: 12, weight: .semibold))
+                    if model.monitorHistory.isEmpty {
+                        Text(model.text("monitor_history_empty"))
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(model.monitorHistory) { entry in
+                        let title = switch entry.kind {
+                        case "CREDIT_INCREASE": model.text("monitor_credit_increase")
+                        case "EARLY_RECOVERY_SUSPECTED": model.text("monitor_early_recovery")
+                        case "SCHEDULED_RESET": model.text("monitor_scheduled_reset")
+                        default: entry.kind
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.system(size: 11, weight: .medium))
+                            Text(Date(timeIntervalSince1970:
+                                Double(entry.observedAtMilliseconds) / 1_000)
+                                .formatted(date: .abbreviated, time: .shortened))
+                            Text(model.text(entry.mockCompleted
+                                ? "monitor_mock_complete" : "monitor_mock_pending"))
+                        }
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 3)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+            }
+            Divider()
+            HStack {
+                Spacer()
+                Button(model.text("monitor_refresh")) { model.refreshWeeklyUsage() }
+                    .disabled(model.isMutating)
+            }
+            .padding(10)
         }
     }
 
@@ -185,6 +273,7 @@ private enum PopoverPage {
     case accounts
     case manageAccounts
     case settings
+    case monitor
     case confirmSwitch(AccountProfile)
 }
 

@@ -35,6 +35,61 @@ struct WeeklyUsageNormalizerTests {
         }
     }
 
+    @Test func free30DayQuotaRetainsRealDurationWithoutInventingWeekly() throws {
+        let payload = """
+            {"rateLimitsByLimitId":{"codex":{"planType":"free",
+                "primary":{"usedPercent":27,"windowDurationMins":43200,"resetsAt":1900000000},
+                "secondary":null}},
+             "rateLimitResetCredits":{"availableCount":0,"credits":[]}}
+            """
+        let parsed = try JSONDecoder().decode(JSONValue.self, from: Data(payload.utf8))
+        let fetched = try CodexClient().interpretRateLimits(parsed)
+        guard case let .nonWeekly(other) = fetched else {
+            Issue.record("Free 30D must not be relabeled as 7D")
+            return
+        }
+        #expect(other.windowLabel == "30D")
+        #expect(other.windowDurationMins == 43_200)
+        #expect(other.remainingPercent == 73)
+        #expect(other.resetsAt == Date(timeIntervalSince1970: 1_900_000_000))
+        #expect(other.resetCreditsRemaining == 0)
+    }
+
+    @Test func standardWeeklyAndFiveHourStillNormalizeUnchanged() throws {
+        let payload = """
+            {"rateLimits":{"primary":{"usedPercent":20,"windowDurationMins":300,"resetsAt":1900000000},
+                "secondary":{"usedPercent":30,"windowDurationMins":10080,"resetsAt":1900100000}}}
+            """
+        let parsed = try JSONDecoder().decode(JSONValue.self, from: Data(payload.utf8))
+        let fetched = try CodexClient().interpretRateLimits(parsed)
+        guard case let .weekly(usage) = fetched else {
+            Issue.record("Existing paid 5H/7D calculation changed")
+            return
+        }
+        #expect(usage.fiveHourRemainingPercent == 80)
+        #expect(usage.remainingPercent == 70)
+    }
+
+    @Test func missingAllQuotaWindowsRemainsUnavailable() throws {
+        let parsed = try JSONDecoder().decode(JSONValue.self,
+            from: Data(#"{"rateLimits":{"primary":null,"secondary":null}}"#.utf8))
+        #expect(throws: CodexClientError.weeklyUsageUnavailable) {
+            try CodexClient().interpretRateLimits(parsed)
+        }
+    }
+
+    @Test func fifteenMinuteWindowUsesActualLabel() throws {
+        let parsed = try JSONDecoder().decode(JSONValue.self,
+            from: Data(#"{"rateLimits":{"primary":{"usedPercent":50,"windowDurationMins":15,"resetsAt":1900000000}}}"#.utf8))
+        let fetched = try CodexClient().interpretRateLimits(parsed)
+        guard case let .nonWeekly(usage) = fetched else {
+            Issue.record("15-minute quota must retain its actual window")
+            return
+        }
+        #expect(usage.windowLabel == "15m")
+        #expect(usage.remainingPercent == 50)
+    }
+
     @Test func rejectsShortWindows() {
         #expect(throws: CodexClientError.weeklyUsageUnavailable) {
             try WeeklyUsageNormalizer.normalize([

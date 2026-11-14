@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 
-const repository = 'liuzhao1225/codex-account-switcher';
+const repository = 'sirious0911/codex-account-switcher';
 const dmg = 'Codex-Account-Switcher-macos-arm64.dmg';
 
 export function latestMacRelease(releases) {
@@ -43,7 +43,9 @@ export async function prepareMacFeed(fetcher = fetch, output = 'site/updates/mac
     if (batch.length < 100) break;
   }
   const release = latestMacRelease(releases);
-  if (!release) throw new Error('No published macOS release with a signed feed was found.');
+  // A new fork may have no signed release yet. The site can still publish
+  // without advertising or fabricating a macOS update feed.
+  if (!release) return null;
   // Construct a platform-specific asset URL; never follow the repository-wide Latest alias.
   const response = await fetcher(`https://github.com/${repository}/releases/download/${release.tag_name}/appcast.xml`, {
     signal: AbortSignal.timeout(30000),
@@ -57,5 +59,6 @@ export async function prepareMacFeed(fetcher = fetch, output = 'site/updates/mac
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  console.log(`macOS update feed: ${await prepareMacFeed()}`);
+  const tag = await prepareMacFeed();
+  console.log(tag ? `macOS update feed: ${tag}` : 'No personal macOS release yet; feed not generated.');
 }

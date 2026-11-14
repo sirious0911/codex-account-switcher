@@ -37,9 +37,213 @@ internal static class Program
                 """);
             Assert(NativeSettings.LatestWindowsVersion(macOnly.RootElement) == null, "A release without a Windows EXE must never prompt a Windows update.");
             Directory.CreateDirectory(output);
+            TelegramSenderScriptContractTest.Run();
+            WindowsPackagedTelegramScriptsTest.Run(output);
+            WindowsExistingAmanoBotRouteTest.Run(output);
+            WindowsExistingAmanoProcessAdapterTest.Run(output);
+            WindowsAmanoProductionOutboxTest.Run(output);
+            WindowsAmanoApprovedDeliveryCoordinatorTest.Run(output);
+            WindowsAmanoConnectivityTest.Run(output);
+            WindowsTelegramAutoSendSessionTest.Run(output);
+            WindowsTelegramAutoRecoveryDispatcherTest.Run(output);
+            WindowsTelegramSenderHandoffTest.Run(output);
+            WindowsSenderAuthorityClientTest.Run();
+            WindowsAuthorityReadOnlyStatusTest.Run();
+            WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
+            var appFields = typeof(App).GetFields(
+                System.Reflection.BindingFlags.Instance |
+                System.Reflection.BindingFlags.NonPublic);
+            Assert(appFields.Any(f => f.FieldType == typeof(TaskbarQuotaPanel)) &&
+                !appFields.Any(f => f.FieldType == typeof(TrayQuotaIcons)) &&
+                !appFields.Any(f => f.FieldType == typeof(IntegratedMiniBarWindow)),
+                "Normal app startup must own a taskbar child host, not floating or overflow-tray displays.");
+            Assert(TaskbarQuotaPanel.Placement ==
+                Deskband11Lib.Core.TaskbarContentPlacement.BeforeNotificationArea &&
+                TaskbarQuotaPanel.PreferredWidth == 166 &&
+                TaskbarQuotaPanel.PreferredHeight == 48 &&
+                TaskbarQuotaPanel.IndicatorHeight == 30,
+                "The hosted HWND must span the taskbar row while the smaller quota strip stays vertically centered, immediately LEFT of ^.");
+            Assert(appFields.Any(f => f.FieldType == typeof(WindowsTelegramLocalSenderLease)),
+                "Windows app must own the session-local Telegram mutex lifecycle.");
+            Assert(appFields.Any(f => f.FieldType == typeof(WindowsAmanoProductionOutbox)),
+                "Windows app must own the durable Telegram approval queue.");
+            Assert(appFields.Any(f => f.FieldType == typeof(WindowsTelegramAutoSendSession)),
+                "Windows app must use the default-OFF, process-only automatic send consent.");
+            Assert(appFields.Any(f => f.FieldType == typeof(AdaptiveUsageRefreshService)),
+                "Adaptive work polling must be owned by the same Windows app, not a second process.");
+            // Metadata-only recent-session detection: never inspect login or transcript bytes.
+            var syntheticHome = Path.Combine(output, "adaptive-work-fixture");
+            var exampleDay = DateTimeOffset.UtcNow;
+            var dayFolder = Path.Combine(syntheticHome, "sessions",
+                exampleDay.Year.ToString("0000"), exampleDay.Month.ToString("00"),
+                exampleDay.Day.ToString("00"));
+            Directory.CreateDirectory(dayFolder);
+            var rollout = Path.Combine(dayFolder, "rollout-synthetic.jsonl");
+            var unrelated = Path.Combine(dayFolder, "unrelated.txt");
+            File.WriteAllText(rollout, "content-is-not-used-in-activity-detection");
+            File.WriteAllText(unrelated, "test");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddSeconds(-40));
+            Assert(CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Recent Codex rollout metadata should count as possible work.");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddMinutes(-4));
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Old rollout activity should not hold one-minute polling forever.");
+            File.SetLastWriteTimeUtc(rollout, exampleDay.UtcDateTime.AddMinutes(2));
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Future timestamps must not falsely trigger active polling.");
+            File.Delete(rollout);
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(syntheticHome, exampleDay),
+                "Non-rollout file changes are not Codex task evidence.");
+            Assert(!CodexWorkActivityDetector.HasRecentSessionFileMetadata(
+                Path.Combine(output, "missing-user-codex-home"), exampleDay),
+                "Missing session files fail idle without blocking the app.");
+            Assert(CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "ChatGPT", @"C:\Program Files\WindowsApps\OpenAI.Codex_0.1_x64__fixture\ChatGPT.exe"),
+                "Official Windows Codex Desktop can use ChatGPT.exe as its manifest binary.");
+            Assert(CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "Codex", @"C:\Program Files\WindowsApps\OpenAI.Codex_0.1_x64__fixture\Codex.exe"),
+                "Official Codex executable is also accepted when package path matches.");
+            Assert(!CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "ChatGPT", @"C:\Program Files\ChatGPT\ChatGPT.exe"),
+                "Unrelated ChatGPT application must not count as active Codex work.");
+            Assert(!CodexWorkActivityDetector.IsOfficialCodexDesktopProcess(
+                "Codex", @"C:\Tools\unrelated\Codex.exe"),
+                "A process name alone never authorizes higher-frequency API polling.");
+
+            using (var taskbar = new TaskbarQuotaPanel(() => {}, () => {}, () => true))
+            {
+                Assert(taskbar.CurrentReadout.FiveHourRemaining == null &&
+                    taskbar.CurrentReadout.ResetCreditsAvailable == null,
+                    "Fresh taskbar host must not invent account quota values.");
+                taskbar.Invalidate();
+                Assert(taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
+                    "Switch or host error must clear the embedded taskbar quota surface.");
+                var free = new NonWeeklyUsage(73, 43_200,
+                    DateTimeOffset.FromUnixTimeSeconds(1_900_000_000), 0, DateTimeOffset.UtcNow);
+                taskbar.AcceptNonWeekly(free);
+                Assert(taskbar.CurrentNonWeeklyUsage?.WindowLabel == "30D" &&
+                       taskbar.CurrentReadout.Status == MiniBarDisplayStatus.Invalidated,
+                    "Real Free 30D must not be published as a weekly quota.");
+                taskbar.Invalidate();
+                Assert(taskbar.CurrentNonWeeklyUsage is null,
+                    "Switch invalidation must immediately clear another account's 30D quota.");
+            }
+            var iconSize = new System.Drawing.Size(16, 16);
+            using (var fiveIcon = TrayUsageIcon.CreateMetric("5H", "85", false,
+                iconSize, MiniBarDisplayStatus.FreshUnbound))
+            using (var weeklyIcon = TrayUsageIcon.CreateMetric("7D", "62", false,
+                iconSize, MiniBarDisplayStatus.FreshUnbound))
+            using (var resetIcon = TrayUsageIcon.CreateMetric("R", "?", true,
+                iconSize, MiniBarDisplayStatus.Unknown))
+            {
+                Assert(fiveIcon.Width == 16 && weeklyIcon.Height == 16 &&
+                    resetIcon.Width == 16,
+                    "Three compact native metric icon drawings must be available.");
+            }
             var client = new FixtureClient();
-            var window = new MainWindow(client);
+
+            // The new in-app minibar is shown by the SAME tray owner. No
+            // Codex runtime, Named Pipe listener or account login is used.
+            var mini = new IntegratedMiniBarWindow(() => {});
+            Assert(!mini.ShowInTaskbar && !mini.Topmost &&
+                Math.Abs(mini.Width - 360) < 0.1 && Math.Abs(mini.Height - 52) < 0.1,
+                "The integrated minibar must be 360x52 DIP, borderless and taskbar-adjacent.");
+            Assert(mini.DisplayFrame.FiveHourRemaining == null,
+                "No synthetic or cached usage must appear before the first active sample.");
+            Render(mini, Path.Combine(output, "integrated-minibar-unknown.png"));
+            Assert(mini.LastDock is not null,
+                "Integrated WPF must invoke native window placement on initialization.");
+            if (mini.LastDock!.Placement.FitsInsideWorkArea)
+            {
+                Assert(mini.LastDock.Success &&
+                    mini.LastDock.ActualRectInsideWorkArea &&
+                    mini.LastDock.TargetDpi >= 96,
+                    "Native placement must verify actual window rectangle and target monitor DPI.");
+                Console.WriteLine("PASS: integrated native dock targetDpi=" +
+                    mini.LastDock.TargetDpi + ", physicalRectInside=" +
+                    mini.LastDock.ActualRectInsideWorkArea);
+            }
+            else Console.WriteLine("SKIP: native dock skipped for undersized CI work area.");
+            var physicalScreens = System.Windows.Forms.Screen.AllScreens;
+            Console.WriteLine("INFO: physical display count=" + physicalScreens.Length);
+            Assert(mini.SelectScreen(Array.Empty<System.Windows.Forms.Screen>()) is null,
+                "Transient zero-display re-enumeration must return no target, not throw.");
+            if (physicalScreens.Length != 0)
+                Assert(mini.SelectScreen(physicalScreens) != null,
+                    "A stable connected display snapshot must resolve a docking target.");
+            var selectorMenu = mini.ContextMenu!.Items.OfType<MenuItem>().First(item =>
+                (string?)item.Header == "표시 모니터 선택");
+            Assert(selectorMenu.Items.Count == physicalScreens.Length,
+                "The integrated minibar monitor menu must enumerate the actual connected screens.");
+            foreach (var screen in physicalScreens)
+            {
+                var selectable = selectorMenu.Items.OfType<MenuItem>().Single(item =>
+                    ((string)item.Header).StartsWith(screen.DeviceName,
+                        StringComparison.Ordinal));
+                selectable.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+                var selectedDock = mini.LastDock ??
+                    throw new Exception("The monitor menu must re-run native docking on selection.");
+                if (selectedDock.Placement.FitsInsideWorkArea)
+                {
+                    Assert(selectedDock.Success && selectedDock.ActualRectInsideWorkArea,
+                        "Each usable monitor must report a verified physical WPF window rectangle.");
+                    double windowWidthPx = Math.Round(mini.Width * selectedDock.TargetDpi / 96.0);
+                    double windowHeightPx = Math.Round(mini.Height * selectedDock.TargetDpi / 96.0);
+                    Assert(selectedDock.PixelLeft >= screen.WorkingArea.Left - 2 &&
+                        selectedDock.PixelTop >= screen.WorkingArea.Top - 2 &&
+                        selectedDock.PixelLeft + windowWidthPx <= screen.WorkingArea.Right + 2 &&
+                        selectedDock.PixelTop + windowHeightPx <= screen.WorkingArea.Bottom + 2,
+                        "Window coordinates must stay within the selected physical monitor work area.");
+                    Console.WriteLine("PASS: native monitor selection, targetDpi=" +
+                        selectedDock.TargetDpi + ", work-area verified");
+                }
+                else Console.WriteLine("SKIP: selected monitor work area too small for minibar.");
+            }
+            var uiNow = DateTimeOffset.UtcNow;
+            const string miniRaw = """
+                {"accountId":"ui-fixture","ordinaryUsageAllowed":null,
+                 "rateLimitsByLimitId":{"codex":{"planType":null,
+                   "primary":{"usedPercent":15,"windowDurationMins":300,"resetsAt":1900000000},
+                   "secondary":{"usedPercent":38,"windowDurationMins":10080,"resetsAt":1900100000}}},
+                 "rateLimitResetCredits":{"availableCount":2,"credits":[
+                   {"status":"available","expiresAt":1900200000},
+                   {"status":"available","expiresAt":1900300000}]}}
+                """;
+            mini.Accept(new CodexMonitorWireSample(uiNow.ToUnixTimeMilliseconds(), miniRaw));
+            var miniFrame = mini.DisplayFrame;
+            Assert(miniFrame.FiveHourRemaining == 85 && miniFrame.WeeklyRemaining == 62 &&
+                miniFrame.ResetCreditsAvailable == 2 && !miniFrame.AccountVerified &&
+                !miniFrame.EventsAllowed && !miniFrame.TelegramAllowed,
+                "In-app WPF should render all three fresh quota values without trusting account identity.");
+            Assert(mini.ToolTip is string freshTip && freshTip.Contains("계정 미확인") &&
+                freshTip.Contains("Codex 5H: 85%") && freshTip.Contains("Codex 7D: 62%") &&
+                freshTip.Contains("Codex 리셋권: 2") &&
+                freshTip.Contains("1번 만료: ") && freshTip.Contains("2번 만료: ") &&
+                freshTip.Contains("다음 초기화: ") && freshTip.Contains(" KST"),
+                "Integrated UI must show both synthetic credit expiries and quota resets without real account access.");
+            Render(mini, Path.Combine(output, "integrated-minibar-fresh.png"));
+            mini.Invalidate();
+            Assert(mini.DisplayFrame.FiveHourRemaining == null &&
+                mini.DisplayFrame.ResetCreditsAvailable == null &&
+                mini.ToolTip is string staleTip && staleTip.Contains("UNKNOWN"),
+                "Account switch or host failure must immediately clear the visible quota values.");
+            Render(mini, Path.Combine(output, "integrated-minibar-invalidated.png"));
+            mini.Hide();
+            Assert(!mini.IsVisible, "Integrated minibar must hide without exiting the account application.");
+            mini.ShowFromTray();
+            Assert(mini.IsVisible, "Existing tray can reopen the same minibar window.");
+            mini.CloseForExit();
+
+            var window = new MainWindow(client,
+                telegramLocalSenderStatus: () =>
+                    "Windows local sender: test-only, actual delivery blocked",
+                packagedTelegramScriptsStatus: () =>
+                    "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단",
+                existingAmanoBotStatus: () =>
+                    "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단",
+                productionTelegramOutboxStatus: () =>
+                    "운영 알림 대기함: 승인 대기 2건 · 실제 발송 별도 승인");
             Assert(window.Icon != null, "The taskbar and title bar must use the packaged application logo.");
             using (var stream = Application.GetResourceStream(App.IconUri).Stream)
             using (var trayIcon = new System.Drawing.Icon(stream, 16, 16))
@@ -102,6 +306,116 @@ internal static class Program
                 "The sign-in hint must sit to the right of Add Account within the same row.");
             Assert(All<TextBlock>(window).Count(text => text.Text == "当前") == 1, "Manage identifies the active account.");
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-zh.png"));
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "Windows local sender: test-only, actual delivery blocked"),
+                "Settings must show local sender status but never grant delivery.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "내장 Telegram 5H·7D 스크립트: 합성 확인 · 실제 발송 차단"),
+                "Settings must surface bundled Telegram sender readiness without sending.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "5H → 기존 모니터 봇(묵음): 전송 경로 준비됨 · 실제 발송 차단"),
+                "Settings must identify reuse of the existing Amano bot, without sending.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text == "운영 알림 대기함: 승인 대기 2건 · 실제 발송 별도 승인"),
+                "Settings must expose persistent production approval queue status.");
+            var runningSha = new NativeSettings().RunningExecutableSha256;
+            Assert(runningSha is { Length: 64 } &&
+                runningSha.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'),
+                "Settings must distinguish running EXE builds with a SHA256 identifier.");
+            using (var input = File.OpenRead(Environment.ProcessPath!)) {
+                var expected = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(input)).ToLowerInvariant();
+                Assert(runningSha == expected,
+                    "Build fingerprint must hash the running executable, not user credentials.");
+            }
+            Assert(All<TextBlock>(window).Any(text =>
+                    text.Text == "실행 빌드: SHA256 " + runningSha![..16] &&
+                    text.ToolTip is string tip && tip.Contains(runningSha, StringComparison.Ordinal)),
+                "Settings must show the actual running EXE identifier and full hash on hover.");
+            Assert(All<Button>(window).Any(button =>
+                    System.Windows.Automation.AutomationProperties.GetName(button) == "빌드 SHA256 복사"),
+                "Settings must offer copying the full executable SHA256.");
+            var existingBot = All<Button>(window).SingleOrDefault(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "기존 Telegram 봇 폴더 선택·저장 (읽기 전용 확인)");
+            Assert(existingBot is not null,
+                "Settings must let the user persist the bot folder selection.");
+            var localSuggestedBot = NativeSettings.FindExistingAmanoBotDirectory(
+                @"C:\Codex\projects");
+            var botAlreadyLinked = new NativeSettings().TelegramBotDirectory;
+            var expectedQuickLink = localSuggestedBot is not null &&
+                !string.Equals(localSuggestedBot, botAlreadyLinked,
+                    StringComparison.OrdinalIgnoreCase);
+            Assert(All<Button>(window).Any(button =>
+                    System.Windows.Automation.AutomationProperties.GetName(button) ==
+                        "기존 인천공항 주차대행 Telegram 봇 연결") == expectedQuickLink,
+                "One-click bot linking appears only when complete existing bot files are found.");
+            Assert(All<TextBlock>(window).Any(text =>
+                text.Text.StartsWith("기존 Telegram 봇 폴더:", StringComparison.Ordinal)),
+                "Settings must show stored/unset bot directory status without raw tokens.");
+            var botFixture = Path.Combine(output, "telegram-bot-file-metadata-only");
+            Directory.CreateDirectory(botFixture);
+            Assert(NativeSettings.NormalizeTelegramBotDirectory(botFixture) ==
+                    Path.GetFullPath(botFixture).TrimEnd(Path.DirectorySeparatorChar),
+                "Existing local fixed-drive bot folder should normalize exactly.");
+            Assert(NativeSettings.NormalizeTelegramBotDirectory(
+                    Path.Combine(botFixture, "missing")) is null &&
+                NativeSettings.NormalizeTelegramBotDirectory(
+                    Path.GetPathRoot(botFixture)) is null &&
+                NativeSettings.NormalizeTelegramBotDirectory(
+                    @"\\remote-host\share\bot") is null,
+                "Missing directories, drive roots, and UNC shares must never be saved.");
+            var missingBot = TelegramBotFileStatus.Inspect(botFixture);
+            Assert(!missingBot.MonitorBotFilesPresent && !missingBot.AlertBotFilesPresent &&
+                !missingBot.ChatDestinationPresent,
+                "Missing Telegram artifacts must not be shown as connected.");
+            foreach (var filename in new[] { "send-telegram-health.ps1",
+                     "telegram-health-token.dpapi", "send-telegram-alert.ps1",
+                     "telegram-token.dpapi", "telegram-chat-id.txt" })
+                File.WriteAllText(Path.Combine(botFixture, filename), "fixture-only");
+            var foundBot = TelegramBotFileStatus.Inspect(botFixture);
+            Assert(foundBot.MonitorBotFilesPresent && foundBot.AlertBotFilesPresent &&
+                foundBot.ChatDestinationPresent && foundBot.Display.Contains("메타데이터만 확인"),
+                "Both bot lanes require metadata presence without authorizing any Telegram send.");
+            var registryBotBeforeDiscovery = new NativeSettings().TelegramBotDirectory;
+            var syntheticRoot = Path.Combine(output, "existing-amano-autodetect-fixture");
+            var syntheticAmano = Path.Combine(syntheticRoot,
+                "_tools", "web-monitor", "amano");
+            Assert(NativeSettings.FindExistingAmanoBotDirectory(syntheticRoot) is null,
+                "A missing Amano folder must never auto-configure the Windows app.");
+            Directory.CreateDirectory(syntheticAmano);
+            foreach (var file in new[] { "send-telegram-health.ps1",
+                     "telegram-health-token.dpapi", "send-telegram-alert.ps1",
+                     "telegram-token.dpapi", "telegram-chat-id.txt" })
+                File.WriteAllText(Path.Combine(syntheticAmano, file), "synthetic-only");
+            Assert(NativeSettings.FindExistingAmanoBotDirectory(syntheticRoot) ==
+                    Path.GetFullPath(syntheticAmano),
+                "Read-only suggestion must detect all five existing Amano bot artifacts.");
+            File.Delete(Path.Combine(syntheticAmano, "telegram-token.dpapi"));
+            Assert(NativeSettings.FindExistingAmanoBotDirectory(syntheticRoot) is null,
+                "Missing legacy alert token must hide the one-click suggestion.");
+            Assert(string.Equals(registryBotBeforeDiscovery,
+                    new NativeSettings().TelegramBotDirectory,
+                    StringComparison.OrdinalIgnoreCase),
+                "Read-only bot discovery must not change the existing Registry selection.");
+            File.WriteAllText(Path.Combine(botFixture, "telegram-health-token.dpapi"), "");
+            Assert(!TelegramBotFileStatus.Inspect(botFixture).MonitorBotFilesPresent &&
+                TelegramBotFileStatus.Inspect(botFixture).AlertBotFilesPresent,
+                "An empty encrypted bot token must fail closed without inspecting token contents.");
+            var telegramPreferences = new NativeSettings().TelegramPreferences;
+            var telegramStatus = All<TextBlock>(window).SingleOrDefault(text =>
+                text.Text.StartsWith("이 기기: ", StringComparison.Ordinal));
+            Assert(telegramStatus is not null &&
+                telegramStatus.Text.Contains(Environment.MachineName, StringComparison.Ordinal) &&
+                telegramStatus.Text.Contains(telegramPreferences.DeviceRole ==
+                    TelegramNotificationDeviceRole.Sender ? "Sender 선택(1건 수동 승인 필요)" : "Viewer",
+                    StringComparison.Ordinal) &&
+                telegramStatus.Text.Contains(telegramPreferences.NotificationsRequested ?
+                    "ON(요청)" : "OFF", StringComparison.Ordinal) &&
+                telegramStatus.Text.Contains("실제 Telegram 발송: 이벤트별 2단계 수동 승인 또는 " +
+                    "이번 실행에서 별도로 동의한 자동 복구 알림만 가능",
+                    StringComparison.Ordinal),
+                "Isolated WPF settings must display device, role, alert request and disabled delivery.");
             var fiveHour = All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == "显示 5 小时用量");
             fiveHour.IsChecked = true; fiveHour.RaiseEvent(new RoutedEventArgs(CheckBox.ClickEvent));
             Assert(client.Commands.Single() == "fiveHour:True", "Settings must save immediately.");
@@ -115,7 +429,9 @@ internal static class Program
             Assert(!All<TextBlock>(window).Any(text => text.Text is "保存" or "Save"), "Settings must not have a Save flow.");
             client.State = client.State with { Settings = client.State.Settings with { ShowsFiveHourUsage = true, AutoResetEnabled = true } };
             window.Navigate("settings"); Render(window, Path.Combine(output, "settings-auto-reset-enabled-zh.png"));
-            Assert(All<CheckBox>(window).Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
+            var enabledToggles = All<CheckBox>(window).ToArray();
+            if (!enabledToggles.Any(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset"))) throw new Exception("Settings toggle absent: page=" + window.CurrentPage + "; total=" + enabledToggles.Length + "; names=" + string.Join(", ", enabledToggles.Select(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle))) + "; expected=" + client.State.Text("auto_reset"));
+            Assert(enabledToggles.Single(toggle => System.Windows.Automation.AutomationProperties.GetName(toggle) == client.State.Text("auto_reset")).IsChecked == true,
                 "The auto-reset toggle must reflect the persisted setting.");
             window.Navigate("accounts"); Render(window, Path.Combine(output, "accounts-five-hour-zh.png"));
             Assert(All<TextBlock>(window).Count(text => text.Text == "5 小时") == 2, "Five-hour view must be per account.");
@@ -141,11 +457,484 @@ internal static class Program
             client.State = client.State with { IsMutating = false };
             window.CloseForExit();
             Assert(closed, "Explicit application exit must release the window.");
+            WindowsLocalSenderLeaseTest.Run(output);
+            VerifyMonitorPage(output, VerifyOfflineRecoveryInbox(output));
+            VerifyTelegramApprovalReviewUi(output);
+            VerifyTelegramConnectivityStageUi(output);
+            VerifyTelegramAutomaticSessionUi(output);
+            VerifyTelegramSenderHandoffUi(output);
+            VerifyAuthorityReadOnlyUi(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyAuthorityReadOnlyUi(string output)
+    {
+        var calls = 0;
+        string? passedKey = null;
+        var window = new MainWindow(new FixtureClient(),
+            authorityReadOnly: (origin, device, secret, pin) =>
+            {
+                calls++;
+                passedKey = secret;
+                Assert(origin == "https://authority.invalid:9443/" &&
+                    device == "windows-1" &&
+                    pin == new string('b', 64),
+                    "Only explicitly entered HTTPS status enrollment is passed.");
+                return Task.FromResult(
+                    "Authority: 조회 시점 Sender mac-1 · epoch 4" +
+                    " · 조회 전용 · Telegram 발송 권한 없음");
+            });
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "authority-settings-default-disconnected.png"));
+        Assert(calls == 0 && All<Expander>(window).Any(e =>
+            System.Windows.Automation.AutomationProperties.GetName(e) ==
+                "공통 Sender Authority 읽기 전용 상태"),
+            "Authority diagnostic must be visible but must never make startup requests.");
+
+        var disclosure = All<Expander>(window).Single(e =>
+            System.Windows.Automation.AutomationProperties.GetName(e) ==
+                "공통 Sender Authority 읽기 전용 상태");
+        disclosure.IsExpanded = true;
+        Render(window, Path.Combine(output, "authority-settings-manual-expanded.png"));
+        var url = All<TextBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "HTTPS Authority 서버");
+        var device = All<TextBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "등록된 장치 ID");
+        var pin = All<TextBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "서버 인증서 SHA256 64자리");
+        var key = All<PasswordBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "장치 HMAC 키 64자리 (표시·저장 안 함)");
+        var fetch = All<Button>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "Authority 상태 1회 조회 (발송 없음)");
+        Assert(calls == 0,
+            "Expanding the Authority pane or inspecting inputs must be read-only.");
+        url.Text = "https://authority.invalid:9443/";
+        device.Text = "windows-1";
+        pin.Text = new string('b', 64);
+        key.Password = "short";
+        fetch.RaiseEvent(new RoutedEventArgs(
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Assert(calls == 0 && key.Password.Length == 0,
+            "Incomplete credentials must be cleared before any request.");
+        key.Password = new string('a', 64);
+        fetch.RaiseEvent(new RoutedEventArgs(
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Assert(calls == 1 && passedKey == new string('a', 64) &&
+            key.Password.Length == 0 &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("조회 시점 Sender mac-1")),
+            "Only an explicit user click triggers one signed GET status request.");
+        window.CloseForExit();
+
+        var detached = new MainWindow(new FixtureClient());
+        detached.Navigate("settings");
+        Render(detached, Path.Combine(output, "authority-unwired-no-credential-ui.png"));
+        Assert(!All<Expander>(detached).Any(e =>
+            System.Windows.Automation.AutomationProperties.GetName(e) ==
+                "공통 Sender Authority 읽기 전용 상태"),
+            "A non-enrolled / synthetic window must not expose a live query action.");
+        detached.CloseForExit();
+    }
+
+    private static void VerifyTelegramSenderHandoffUi(string output)
+    {
+        var calls = 0;
+        var window = new MainWindow(new FixtureClient(),
+            telegramAutoArmed: () => true,
+            telegramHandoff: () =>
+            {
+                calls++;
+                return WindowsTelegramHandoffStatus.WindowsViewerOffVerified;
+            });
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "telegram-sender-handoff-confirmation.png"));
+        var handoff = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "Windows Sender 중지 및 Mac 이관 준비");
+        Assert(handoff.IsEnabled && calls == 0 &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("Mac의 실제 발송 권한은 활성화하지 않습니다.")),
+            "Handoff must show the local-only limitation, not claim remote ownership.");
+        window.Navigate("accounts");
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "telegram-sender-handoff-return.png"));
+        Assert(calls == 0,
+            "Rendering, navigation and opening settings must never modify Sender role.");
+        window.CloseForExit();
+
+        var detached = new MainWindow(new FixtureClient());
+        detached.Navigate("settings");
+        Render(detached, Path.Combine(output, "telegram-handoff-not-wired.png"));
+        Assert(!All<Button>(detached).Any(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "Windows Sender 중지 및 Mac 이관 준비"),
+            "A window without an explicit product handoff callback cannot mutate Sender.");
+        detached.CloseForExit();
+    }
+
+    private static void VerifyTelegramAutomaticSessionUi(string output)
+    {
+        var armed = false;
+        var actions = 0;
+        var window = new MainWindow(new FixtureClient(),
+            telegramAutoArmed: () => armed,
+            telegramAutoAction: (turnOn, otherHostsOff) =>
+            {
+                actions++;
+                if (turnOn && !otherHostsOff)
+                    throw new InvalidOperationException("Missing external-host confirmation.");
+                armed = turnOn;
+                return true;
+            });
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "telegram-auto-default-off.png"));
+        var autoButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "이번 실행에서 복구 알림 자동 발송 활성화");
+        var otherHost = All<CheckBox>(window).Single(box =>
+            System.Windows.Automation.AutomationProperties.GetName(box) ==
+                "자동 Telegram 다른 장치 OFF 직접 확인");
+        Assert(!armed && !autoButton.IsEnabled && otherHost.IsChecked == false &&
+            actions == 0 &&
+            All<TextBlock>(window).Any(t =>
+                t.Text.Contains("자동 송신 OFF · 사용자가 이번 실행에서 직접 활성화해야 합니다.")),
+            "Auto-send OFF must be visible and its enable action disabled on startup.");
+
+        otherHost.IsChecked = true;
+        Assert(autoButton.IsEnabled && !armed && actions == 0,
+            "Checking other hosts is not sufficient to arm without final Yes consent.");
+        otherHost.IsChecked = false;
+        Assert(!autoButton.IsEnabled && !armed && actions == 0,
+            "Unchecking remote device acknowledgment must immediately disable arming.");
+        window.CloseForExit();
+
+        armed = true; // Synthetic UI state for testing the always-available OFF action.
+        var stopWindow = new MainWindow(new FixtureClient(),
+            telegramAutoArmed: () => armed,
+            telegramAutoAction: (turnOn, otherHostsOff) =>
+            {
+                actions++;
+                armed = turnOn;
+                return true;
+            });
+        stopWindow.Navigate("settings");
+        Render(stopWindow, Path.Combine(output, "telegram-auto-session-armed-fake.png"));
+        var stop = All<Button>(stopWindow).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "이번 실행의 자동 Telegram 발송 중지");
+        Assert(stop.IsEnabled && armed &&
+            !All<CheckBox>(stopWindow).Any(box =>
+                System.Windows.Automation.AutomationProperties.GetName(box) ==
+                    "자동 Telegram 다른 장치 OFF 직접 확인"),
+            "An active session must offer direct stop without another approval dialog.");
+        stop.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(stopWindow, Path.Combine(output, "telegram-auto-stopped-fake.png"));
+        Assert(!armed && actions == 1 &&
+            All<Button>(stopWindow).Single(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "이번 실행에서 복구 알림 자동 발송 활성화").IsEnabled == false,
+            "STOP must immediately disarm the session without sending any message.");
+        stopWindow.CloseForExit();
+
+        var unwired = new MainWindow(new FixtureClient());
+        unwired.Navigate("settings");
+        Render(unwired, Path.Combine(output, "telegram-auto-unwired.png"));
+        Assert(!All<Button>(unwired).Any(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "이번 실행에서 복구 알림 자동 발송 활성화"),
+            "No auto-send callback must mean no executable auto-send UI.");
+        unwired.CloseForExit();
+    }
+
+    private static void VerifyTelegramConnectivityStageUi(string output)
+    {
+        var pending = new List<WindowsTelegramApprovalRow>();
+        var stages = 0;
+        var sendCallbacks = 0;
+        var when = new DateTimeOffset(2026, 11, 13, 3, 45, 0, TimeSpan.Zero);
+        var window = new MainWindow(new FixtureClient(),
+            telegramPendingApprovals: () => pending,
+            telegramTestStage: lane =>
+            {
+                stages++;
+                var hex = lane == TelegramNotificationLane.FiveHourRecovery
+                    ? new string('d', 64) : new string('e', 64);
+                if (!pending.Any(item => item.Lane == lane))
+                    pending.Add(new WindowsTelegramApprovalRow(lane, hex, when, true));
+                return "테스트 대기 항목 생성 · 실제 발송 없음";
+            },
+            telegramApprovedSend: (_, _) =>
+            {
+                sendCallbacks++;
+                return Task.FromResult("synthetic callback only");
+            });
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "telegram-test-buttons-available.png"));
+        var five = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "5H 묵음 테스트 항목 생성");
+        var seven = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "7D 일반 알림 테스트 항목 생성");
+        Assert(stages == 0 && sendCallbacks == 0 && five.IsEnabled && seven.IsEnabled,
+            "Showing connectivity options must never stage or send anything.");
+
+        five.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-five-pending.png"));
+        Assert(stages == 1 && sendCallbacks == 0 &&
+            pending.Single().IsTest && pending.Single().LaneLabel.Contains("연결 테스트") &&
+            All<TextBlock>(window).Any(t =>
+                t.Text.Contains("테스트 대기 항목 생성 · 실제 발송 없음")),
+            "5H test click must stage only, not send or impersonate a reset.");
+        five = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "5H 묵음 테스트 항목 생성");
+        five.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-duplicate-ignored.png"));
+        Assert(stages == 2 && pending.Count == 1 && sendCallbacks == 0,
+            "Repeat click must not produce multiple pending tests or Telegram sends.");
+
+        seven = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "7D 일반 알림 테스트 항목 생성");
+        seven.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-both-pending.png"));
+        Assert(stages == 3 && pending.Count == 2 && sendCallbacks == 0,
+            "7D test must stage independently without any auto-send callback.");
+
+        var review = All<Button>(window).First(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토");
+        review.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-test-review-needs-consent.png"));
+        Assert(window.CurrentPage == "telegram-approve" &&
+            All<TextBlock>(window).Any(t =>
+                t.Text.Contains("테스트 생성")) &&
+            All<Button>(window).Single(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) ==
+                    "선택한 알림 1건 실제 Telegram 발송").IsEnabled == false &&
+            sendCallbacks == 0,
+            "Reviewing a TEST still requires separate cross-host and final approval.");
+        window.CloseForExit();
+
+        var unwired = new MainWindow(new FixtureClient());
+        unwired.Navigate("monitor");
+        Render(unwired, Path.Combine(output, "telegram-test-unwired-hidden.png"));
+        Assert(!All<Button>(unwired).Any(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "5H 묵음 테스트 항목 생성"),
+            "No runtime staging callback means no connectivity test UI.");
+        unwired.CloseForExit();
+    }
+
+    private static void VerifyTelegramApprovalReviewUi(string output)
+    {
+        var key = new string('f', 64);
+        var selected = new WindowsTelegramApprovalRow(
+            TelegramNotificationLane.FiveHourRecovery, key,
+            new DateTimeOffset(2026, 11, 13, 1, 0, 0, TimeSpan.Zero));
+        var callbackCalls = 0;
+        var window = new MainWindow(new FixtureClient(),
+            telegramPendingApprovals: () => [selected],
+            telegramApprovedSend: (_, _) =>
+            {
+                callbackCalls++;
+                return Task.FromResult("synthetic test only");
+            });
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "telegram-approval-queue-zh.png"));
+        var review = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토");
+        Assert(review.IsEnabled &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("대기 항목은 자동 발송되지 않습니다.")) &&
+            callbackCalls == 0,
+            "A staged event may only open a user review; never auto-send.");
+
+        review.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Render(window, Path.Combine(output, "telegram-approval-review-zh.png"));
+        Assert(window.CurrentPage == "telegram-approve" &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("다른 PC/Mac의 송신 중지는 앱이 원격으로 증명하지 못합니다.")) &&
+            All<TextBlock>(window).Any(text =>
+                text.ToolTip is string tip && tip == key),
+            "Exact-event review must warn the user about missing cross-host proof.");
+
+        var check = All<CheckBox>(window).Single(checkbox =>
+            System.Windows.Automation.AutomationProperties.GetName(checkbox) ==
+                "다른 장치 Telegram 송신 OFF 확인");
+        var submit = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) ==
+                "선택한 알림 1건 실제 Telegram 발송");
+        Assert(check.IsChecked == false && !submit.IsEnabled && callbackCalls == 0,
+            "Actual send must be disabled until explicit device confirmation.");
+
+        check.IsChecked = true;
+        check.IsChecked = false;
+        Assert(!submit.IsEnabled && callbackCalls == 0,
+            "Enabling/disabling a checkbox must never dispatch Telegram.");
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "telegram-approval-queue-return-zh.png"));
+        Assert(callbackCalls == 0 &&
+            All<Button>(window).Any(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토"),
+            "Abandoning review must leave the event unconsumed.");
+        window.CloseForExit();
+
+        var disabled = new MainWindow(new FixtureClient(),
+            telegramPendingApprovals: () => [selected]);
+        disabled.Navigate("monitor");
+        Render(disabled, Path.Combine(output, "telegram-approval-unwired-zh.png"));
+        Assert(All<Button>(disabled).Single(button =>
+                System.Windows.Automation.AutomationProperties.GetName(button) == "1건 검토")
+                    .IsEnabled == false,
+            "Without an explicit send callback, no UI may approve any event.");
+        disabled.CloseForExit();
+    }
+
+    private static OfflineTelegramInboxSnapshot VerifyOfflineRecoveryInbox(string output)
+    {
+        var directory = Path.Combine(output, "telegram-recovery-inbox-fixture");
+        Assert(!Directory.Exists(directory), "Inbox fixture must start absent.");
+        var missing = OfflineTelegramRecoveryInbox.Read(directory);
+        Assert(missing.Rows.Count == 0 && !missing.LedgerReadError &&
+            !Directory.Exists(directory),
+            "Reading an absent inbox must never create directories or ledger files.");
+        var now = DateTimeOffset.UtcNow;
+        var firstKey = new string('a', 64);
+        var collisionKey = new string('a', 63) + "b"; // same displayed eight chars
+        var weeklyKey = new string('b', 64);
+        var five = new FiveHour100Alert(firstKey, "FIVE_HOUR_100_RECOVERED",
+            "fiveHour", 100, now.AddMinutes(-2), now.AddHours(5), "MOCK_PENDING");
+        var collision = five with { Key = collisionKey,
+            ObservedAt = now.AddMinutes(-1), Status = "MOCK_UNCERTAIN" };
+        var week = new Weekly100Alert(weeklyKey, "WEEKLY_100_RECOVERED",
+            "week", 100, now, now.AddDays(7), "MOCK_RESERVED");
+        var projection = OfflineTelegramRecoveryInbox.Project(
+            [five, collision, five with { ObservedAt = now.AddMinutes(-3) },
+                five with { Kind = "WRONG_KIND" }],
+            [week, week with { Key = "not-hex" }]);
+        Assert(projection.Rows.Count == 3 &&
+            projection.Rows[0].Lane == "7D" &&
+            projection.Rows[0].Destination == "얼럿 봇" &&
+            projection.Rows[1].Lane == "5H" &&
+            projection.Rows[1].StatusLabel == "모의 결과 불확실" &&
+            projection.Rows[2].StatusLabel == "모의 대기",
+            "Offline inbox must route both lanes, dedupe by full key, order and label mock statuses.");
+        Assert(projection.Rows[1].EventReference == projection.Rows[2].EventReference,
+            "Two events sharing only a short hash prefix must not be dropped.");
+        var fiveDir = Path.Combine(directory, "usage-monitor-fivehour100");
+        var weekDir = Path.Combine(directory, "usage-monitor-weekly100");
+        Directory.CreateDirectory(fiveDir);
+        Directory.CreateDirectory(weekDir);
+        var fivePath = Path.Combine(fiveDir, "state.json");
+        var weekPath = Path.Combine(weekDir, "state.json");
+        File.WriteAllText(fivePath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new FiveHour100DurableState { Outbox = [five, collision] }));
+        File.WriteAllText(weekPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new Weekly100DurableState { Outbox = [week] }));
+        var onDisk = OfflineTelegramRecoveryInbox.Read(directory);
+        Assert(onDisk.Rows.Count == 3 && !onDisk.LedgerReadError,
+            "Real on-disk detector ledger schemas must be readable without a sender.");
+        File.WriteAllText(weekPath, "{invalid-json");
+        var corrupt = OfflineTelegramRecoveryInbox.Read(directory);
+        Assert(corrupt.LedgerReadError && corrupt.Rows.Count == 2 &&
+            corrupt.Rows.All(row => row.Lane == "5H"),
+            "A corrupt 7D ledger must report an error while keeping valid 5H rows.");
+        File.WriteAllText(weekPath,
+            System.Text.Json.JsonSerializer.Serialize(
+                new Weekly100DurableState { SchemaVersion = 999, Outbox = [week] }));
+        Assert(OfflineTelegramRecoveryInbox.Read(directory).LedgerReadError,
+            "Unknown ledger schema must not be reported as a valid event.");
+        return projection;
+    }
+
+    private static void VerifyMonitorPage(string output, OfflineTelegramInboxSnapshot inbox)
+    {
+        var client = new FixtureClient();
+        var history = new LocalMonitorHistoryRow(
+            "a1b2c3d4", "CREDIT_INCREASE", "credits",
+            DateTimeOffset.FromUnixTimeSeconds(1_800_000_000),
+            1, 2, true);
+        var window = new MainWindow(client, monitorHistory: () => new[] { history },
+            telegramRecoveryInbox: () => inbox,
+            productionTelegramOutboxStatus: () =>
+                "운영 알림 대기함: 승인 대기 2건 · 실제 발송 별도 승인");
+        Render(window, Path.Combine(output, "monitor-account-list-zh.png"));
+        var commandsBefore = client.Commands.Count;
+        var untouched = client.State;
+        var monitorButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == client.State.Text("monitor_title"));
+        monitorButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert(window.CurrentPage == "monitor" && client.Commands.Count == commandsBefore,
+            "Opening the monitor must not issue a change or sign-in command.");
+        Render(window, Path.Combine(output, "monitor-zh.png"));
+        var texts = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(texts.Contains("Telegram 운영 알림 (승인 전 발송 없음)") &&
+            texts.Any(text => text.Contains("운영 알림 대기함: 승인 대기 2건")),
+            "Monitor must show the separate durable approval queue, without real sends.");
+        Assert(texts.Contains("Telegram 복구 알림 대기함 (오프라인)") &&
+            texts.Any(text => text.Contains("실제 발송") &&
+                text.Contains("아닙니다")) &&
+            texts.Any(text => text.Contains("5H → 모니터 봇(묵음)") &&
+                text.Contains("모의 대기")) &&
+            texts.Any(text => text.Contains("7D → 얼럿 봇") &&
+                text.Contains("모의 예약")),
+            "Monitor must connect real recovery ledger projections to a no-send 5H/7D inbox.");
+        Assert(All<TextBlock>(window).Any(text => text.ToolTip is string tip &&
+                tip.Contains("실제 Telegram 발송/수신 증거 없음")),
+            "No offline recovery event may be presented as a Telegram delivery receipt.");
+        Assert(texts.Contains("원격 기기 사용량 (P3)") &&
+               texts.Any(text => text.Contains("Mac 5H: ?") &&
+                                 text.Contains("Mac 7D: ?") &&
+                                 text.Contains("Mac R: ?")),
+            "Remote quota must be an independent UNKNOWN view until opt-in.");
+        Assert(All<PasswordBox>(window).Count(x =>
+                   System.Windows.Automation.AutomationProperties.GetName(x) ==
+                       "원격 조회 자격정보") == 1,
+            "Remote viewer must request an ephemeral password, not persist it.");
+        Assert(All<Button>(window).Any(x =>
+                   System.Windows.Automation.AutomationProperties.GetName(x) ==
+                       "원격 사용량 연결"),
+            "Remote viewer must require explicit connection.");
+        Assert(texts.Any(text => text.Contains("personal@example.test")) &&
+               texts.Any(text => text.Contains("studio@example.test")),
+            "Monitor must show both account snapshot rows.");
+        Assert(texts.Count(text => text == "5 小时") == 2 &&
+               texts.Count(text => text == "7 天") == 2,
+            "Monitor must display both quota windows independent of the home toggle.");
+        Assert(texts.Contains("重置次数: 2") && texts.Contains("重置次数: 未知"),
+            "Reset credits must distinguish reported quantity and UNKNOWN.");
+        Assert(texts.Any(text => text.Contains(client.State.Text("monitor_credit_increase"))),
+            "The monitor should show persisted mock event history when available.");
+        Assert(All<TextBlock>(window).Any(text => text.ToolTip is string tip &&
+            tip.Contains("a1b2c3d4") && tip.Contains(client.State.Text("monitor_mock_complete"))),
+            "Historical entries must show their mock-only delivery status.");
+        var unavailable = untouched.Accounts[1] with {
+            Usage = null, UsageStatus = "error", UsageError = "fixture refresh failed"
+        };
+        client.State = untouched with { Accounts = new[] { untouched.Accounts[0], unavailable } };
+        window.Navigate("monitor");
+        Render(window, Path.Combine(output, "monitor-unavailable-zh.png"));
+        var missing = All<TextBlock>(window).Select(text => text.Text).ToArray();
+        Assert(missing.Contains("5 小时: 未知") && missing.Contains("7 天: 未知"),
+            "Unreported quota windows must display UNKNOWN, not 0%.");
+        var refreshButton = All<Button>(window).Single(button =>
+            System.Windows.Automation.AutomationProperties.GetName(button) == client.State.Text("monitor_refresh"));
+        refreshButton.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        Assert(client.Commands.SequenceEqual(new[] { "refresh:" }),
+            "Refresh must use the existing usage-refresh command, not an account switch.");
+        window.CloseForExit();
+    }
+
     private static void Assert(bool condition, string message) { if (!condition) throw new Exception(message); }
     private static IEnumerable<T> All<T>(DependencyObject parent) where T : DependencyObject {
         for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++) {
@@ -174,7 +963,8 @@ internal static class Program
                     "loaded", new(new DateTimeOffset(2099, 10, 17, 12, 0, 0, TimeSpan.Zero), time)),
                 new(new(Guid.Parse("22222222-2222-2222-2222-222222222222"), "Studio", "studio@example.test"), "S", new(56, time.AddHours(1), 68, time.AddHours(-1)), null)
             ], id, new("simplifiedChinese"), false, false, true, null, new() {
-                ["usage"] = "用量", ["resets"] = "重置于", ["reset_credits"] = "重置次数", ["unknown"] = "未知", ["left"] = "% 剩余", ["manage"] = "管理账号", ["settings"] = "设置", ["quit"] = "退出应用",
+                ["monitor_title"] = "用量监控", ["monitor_source_hint"] = "从现有服务读取的用量快照。", ["monitor_refresh"] = "刷新用量",
+                ["monitor_last_known"] = "上次记录的数据。", ["usage"] = "用量", ["resets"] = "重置于", ["reset_credits"] = "重置次数", ["unknown"] = "未知", ["left"] = "% 剩余", ["manage"] = "管理账号", ["settings"] = "设置", ["quit"] = "退出应用",
                 ["subscription_until"] = "有效期：%@", ["subscription_snapshot"] = "登录快照", ["subscription_old_snapshot"] = "旧登录快照",
                 ["subscription_unknown"] = "有效期：未知", ["subscription_detail"] = "最近核验于 %@。",
                 ["accounts"] = "账号", ["back"] = "返回", ["active"] = "当前", ["remove"] = "移除", ["add_account"] = "添加账号",

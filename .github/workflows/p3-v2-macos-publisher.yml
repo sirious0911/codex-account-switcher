@@ -1,0 +1,29 @@
+name: P3 V2 macOS read-only HTTPS PUT publisher
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "Sources/CodexAccountSwitcher/MacQuotaV2HttpsPublisher.swift"
+      - "Sources/CodexAccountSwitcher/AppModel.swift"
+      - "Tests/CodexAccountSwitcherTests/MacQuotaV2HttpsPublisherTests.swift"
+      - ".github/workflows/p3-v2-macos-publisher.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  macos-v2-publisher:
+    name: macOS Swift V2 one-shot quota publish source
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Native Swift toolchain
+        run: |
+          xcode-select -p
+          swift --version
+      - name: Build full app and run V2 publisher synthetic tests
+        run: swift test

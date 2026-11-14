@@ -106,6 +106,9 @@ public struct WeeklyUsage: Codable, Equatable, Sendable {
     public let fiveHourResetsAt: Date?
     public let resetCreditsRemaining: Int?
     public let resetCredits: [BankedResetCredit]?
+    /// Only reported values from the matching account/rateLimits/read response.
+    public let planType: String?
+    public let ordinaryUsageAllowed: Bool?
 
     public init(
         remainingPercent: Int,
@@ -113,7 +116,9 @@ public struct WeeklyUsage: Codable, Equatable, Sendable {
         fiveHourRemainingPercent: Int? = nil,
         fiveHourResetsAt: Date? = nil,
         resetCreditsRemaining: Int? = nil,
-        resetCredits: [BankedResetCredit]? = nil
+        resetCredits: [BankedResetCredit]? = nil,
+        planType: String? = nil,
+        ordinaryUsageAllowed: Bool? = nil
     ) {
         self.remainingPercent = remainingPercent
         self.resetsAt = resetsAt
@@ -121,7 +126,41 @@ public struct WeeklyUsage: Codable, Equatable, Sendable {
         self.fiveHourResetsAt = fiveHourResetsAt
         self.resetCreditsRemaining = resetCreditsRemaining
         self.resetCredits = resetCredits
+        self.planType = planType
+        self.ordinaryUsageAllowed = ordinaryUsageAllowed
     }
+}
+
+/// A real Codex quota with a nonstandard duration (such as Free 30D).
+/// It must NEVER be mislabeled as a five-hour or seven-day window.
+public struct NonWeeklyUsage: Codable, Equatable, Sendable {
+    public let remainingPercent: Int
+    public let windowDurationMins: Int
+    public let resetsAt: Date
+    public let resetCreditsRemaining: Int?
+    /// Stable receipt time so re-rendering a cached snapshot cannot extend freshness.
+    public let observedAt: Date
+
+    public init(remainingPercent: Int, windowDurationMins: Int,
+                resetsAt: Date, resetCreditsRemaining: Int? = nil,
+                observedAt: Date = Date()) {
+        self.remainingPercent = remainingPercent
+        self.windowDurationMins = windowDurationMins
+        self.resetsAt = resetsAt
+        self.resetCreditsRemaining = resetCreditsRemaining
+        self.observedAt = observedAt
+    }
+
+    public var windowLabel: String {
+        if windowDurationMins % 1_440 == 0 { return "\(windowDurationMins / 1_440)D" }
+        if windowDurationMins % 60 == 0 { return "\(windowDurationMins / 60)H" }
+        return "\(windowDurationMins)m"
+    }
+}
+
+public enum AccountUsageResult: Sendable {
+    case weekly(WeeklyUsage)
+    case nonWeekly(NonWeeklyUsage)
 }
 
 public struct UsageCacheEntry: Codable, Equatable, Sendable {
@@ -146,20 +185,33 @@ public enum UsageViewState: Equatable, Sendable {
     case idle
     case loaded(WeeklyUsage)
     case stale(WeeklyUsage, String)
+    case nonWeekly(NonWeeklyUsage)
+    case staleNonWeekly(NonWeeklyUsage, String)
     case unavailable(String)
 
     public var displayedUsage: WeeklyUsage? {
         switch self {
         case let .loaded(usage), let .stale(usage, _):
             usage
-        case .idle, .unavailable:
+        case .idle, .nonWeekly, .staleNonWeekly, .unavailable:
+            nil
+        }
+    }
+
+    public var nonWeeklyUsage: NonWeeklyUsage? {
+        switch self {
+        case let .nonWeekly(usage), let .staleNonWeekly(usage, _):
+            usage
+        default:
             nil
         }
     }
 
     public var refreshError: String? {
-        guard case let .stale(_, message) = self else { return nil }
-        return message
+        switch self {
+        case let .stale(_, message), let .staleNonWeekly(_, message): message
+        default: nil
+        }
     }
 }
 

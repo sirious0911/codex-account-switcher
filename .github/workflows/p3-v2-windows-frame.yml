@@ -1,0 +1,39 @@
+name: P3 V2 Windows read-only R frame interoperability
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "windows/CodexAccountSwitcher.Core/VerifiedActiveQuotaV2FrameEncoder.cs"
+      - "windows/CodexAccountSwitcher.P3V2FrameChecks/**"
+      - "shared-authority/offline/windows-v2-frame-interop.test.mjs"
+      - "shared-authority/offline/quota-view-candidate-v2.mjs"
+      - "shared-authority/offline/quota-view-candidate-v2.test.mjs"
+      - ".github/workflows/p3-v2-windows-frame.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  verified-r-frame:
+    name: Windows C# verified R frame to Node V2
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Build Windows data-only V2 producer
+        shell: pwsh
+        run: |
+          dotnet build windows/CodexAccountSwitcher.P3V2FrameChecks -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Windows V2 data-only producer build failed' }
+      - name: Verify synthetic V2 R frames cross the C# and Node boundary
+        shell: pwsh
+        run: |
+          node --test shared-authority/offline/windows-v2-frame-interop.test.mjs shared-authority/offline/quota-view-candidate-v2.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'C# to Node V2 R frame integration failed' }

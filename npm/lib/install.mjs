@@ -12,9 +12,9 @@ export const assets = {
   macOS: "Codex-Account-Switcher-macos-arm64.dmg",
   windows: "Codex-Account-Switcher-windows-x64.exe",
 };
-const appName = "Codex Account Switcher.app";
-const bundleID = "com.liuzhao.codex-account-switcher";
-const windowsName = "Codex Account Switcher.exe";
+const appName = "Codex Account Switcher Personal.app";
+const bundleID = "com.sirious0911.codex-account-switcher";
+const windowsName = "Codex Account Switcher Personal.exe";
 const launchServices = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
 
 async function statIfExists(target) {
@@ -40,7 +40,7 @@ export async function installTarget({ platform = process.platform, arch = proces
   }
   if (platform === "win32" && arch === "x64" && Number(release.split(".")[0]) >= 10) {
     if (!directory && !localAppData) throw new Error("LOCALAPPDATA is unavailable; pass --dir <directory>.");
-    return { platform, asset: assets.windows, target: path.resolve(directory ?? path.join(localAppData, "Programs", "Codex Account Switcher"), windowsName), legacyTargets: [] };
+    return { platform, asset: assets.windows, target: path.resolve(directory ?? path.join(localAppData, "Programs", "Codex Account Switcher Personal"), windowsName), legacyTargets: [] };
   }
   throw new Error(`Unsupported system: ${platform}/${arch} (${release}). Requires macOS 14+ with ARM64 Node.js, or Windows 10/11 with x64 Node.js.`);
 }
@@ -197,7 +197,7 @@ export async function removeMacLegacyApps(options, runCommand = run) {
 export function configureLauncher(platform, target, remove = false, runCommand = run) {
   if (platform === "darwin") return runCommand(launchServices, [remove ? "-u" : "-f", target]);
   return powershell(`
-    $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Account Switcher.lnk';
+    $link = Join-Path ([Environment]::GetFolderPath('Programs')) 'Codex Account Switcher Personal.lnk';
     Add-Type -Path $env:CODEX_SWITCHER_SHORTCUT_SOURCE;
     if ($env:CODEX_SWITCHER_REMOVE -eq 'true') {
       if ((Test-Path -LiteralPath $link) -and [SwitcherShortcut]::Read($link) -eq $env:CODEX_SWITCHER_TARGET) { Remove-Item -LiteralPath $link }

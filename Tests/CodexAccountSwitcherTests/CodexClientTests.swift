@@ -65,6 +65,43 @@ struct CodexClientTests {
         #expect(usage.resetCreditsRemaining == 2)
     }
 
+    @Test func readsOfficialPlanAndPermissionFromSameRateLimitsResponse() async throws {
+        let fixture = try ScriptFixture(body: #"""
+        while IFS= read -r line; do
+          case "$line" in
+            *initialized*) ;;
+            *initialize*) printf '%s\n' '{"id":0,"result":{}}' ;;
+            *rateLimits*) printf '%s\n' '{"id":1,"result":{"ordinaryUsageAllowed":true,"rateLimitResetCredits":{"availableCount":1},"rateLimitsByLimitId":{"codex":{"planType":"pro","primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":1800030000},"secondary":{"usedPercent":40,"windowDurationMins":10080,"resetsAt":1800600000}}}}}' ;;
+          esac
+        done
+        """#)
+        defer { fixture.remove() }
+        let client = CodexClient(locator: .init(explicitURL: fixture.executable), requestTimeout: .seconds(2))
+        let usage = try await client.readWeeklyUsage(profileHome: fixture.root)
+        #expect(usage.planType == "pro")
+        #expect(usage.ordinaryUsageAllowed == true)
+        #expect(usage.remainingPercent == 60)
+        #expect(usage.fiveHourRemainingPercent == 75)
+        #expect(usage.resetCreditsRemaining == 1)
+    }
+
+    @Test func missingPlanAndPermissionRemainUnknownInRateLimitResponse() async throws {
+        let fixture = try ScriptFixture(body: #"""
+        while IFS= read -r line; do
+          case "$line" in
+            *initialized*) ;;
+            *initialize*) printf '%s\n' '{"id":0,"result":{}}' ;;
+            *rateLimits*) printf '%s\n' '{"id":1,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDurationMins":300,"resetsAt":1800030000},"secondary":{"usedPercent":40,"windowDurationMins":10080,"resetsAt":1800600000}}}}' ;;
+          esac
+        done
+        """#)
+        defer { fixture.remove() }
+        let client = CodexClient(locator: .init(explicitURL: fixture.executable), requestTimeout: .seconds(2))
+        let usage = try await client.readWeeklyUsage(profileHome: fixture.root)
+        #expect(usage.planType == nil)
+        #expect(usage.ordinaryUsageAllowed == nil)
+    }
+
     @Test func preservesFinalResponseWithoutNewline() async throws {
         let fixture = try ScriptFixture(body: #"""
         while IFS= read -r line; do

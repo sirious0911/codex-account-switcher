@@ -6,7 +6,7 @@ import SwitcherCore
 @MainActor
 final class TiboForecastModel: ObservableObject {
     private static let logger = Logger(
-        subsystem: "com.liuzhao.codex-account-switcher", category: "TiboForecast"
+        subsystem: "com.sirious0911.codex-account-switcher", category: "TiboForecast"
     )
     @Published private(set) var forecast: TiboResetForecast?
     @Published private(set) var isLoading = false
@@ -58,7 +58,7 @@ final class TiboForecastModel: ObservableObject {
         let url = URL(string: "https://codex-reset.com/api/forecast")!
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
         request.setValue(
-            "CodexAccountSwitcher/\(CodexClient().clientVersion) (+https://github.com/liuzhao1225/codex-account-switcher)",
+            "CodexAccountSwitcher/\(CodexClient().clientVersion) (+https://github.com/sirious0911/codex-account-switcher)",
             forHTTPHeaderField: "User-Agent"
         )
         let configuration = URLSessionConfiguration.ephemeral

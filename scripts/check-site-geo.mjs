@@ -3,9 +3,9 @@ import path from "node:path";
 
 const root = process.cwd();
 const siteRoot = path.join(root, "site");
-const baseURL = "https://liuzhao1225.github.io/codex-account-switcher/";
+const baseURL = "https://sirious0911.github.io/codex-account-switcher/";
 const llmsURL = `${baseURL}llms.txt`;
-const latestDMGURL = "https://github.com/liuzhao1225/codex-account-switcher/releases/latest/download/Codex-Account-Switcher-macos-arm64.dmg";
+const latestDMGURL = "https://github.com/sirious0911/codex-account-switcher/releases/latest/download/Codex-Account-Switcher-macos-arm64.dmg";
 const errors = [];
 const pages = new Map();
 const citation = fs.readFileSync(path.join(root, "CITATION.cff"), "utf8");
@@ -25,7 +25,7 @@ function validDate(value) {
 
 function checkTarget(href, sourceURL, label) {
   const url = new URL(href, sourceURL);
-  const repositoryPrefix = "https://github.com/liuzhao1225/codex-account-switcher/blob/main/";
+  const repositoryPrefix = "https://github.com/sirious0911/codex-account-switcher/blob/main/";
   if (url.href.startsWith(repositoryPrefix)) {
     const relative = decodeURIComponent(url.pathname.split("/blob/main/")[1]);
     if (!fs.existsSync(path.join(root, relative))) fail(`${label}: missing repository source ${relative}`);

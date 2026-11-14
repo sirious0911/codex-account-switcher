@@ -35,6 +35,23 @@ try {
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtimeStaging }
     Get-ChildItem -LiteralPath (Join-Path $windowsRoot 'licenses') -Filter '*.txt' -File |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtimeStaging }
+    # Ship reviewed, NON-SECRET sender scripts in the existing single-EXE
+    # SwiftRuntime.zip payload. Never bundle bot credentials or chat IDs.
+    $telegramScripts = @(
+        @{ Name='send-fivehour100-existing-monitor-bot.ps1'; Hash='57a671a98293326e90932027bb8003d1dc63dd67e2c2e04dc6a1d444c0cd4ec9' },
+        @{ Name='send-weekly100-existing-alert-bot.ps1'; Hash='ca1877688a28c291728a419fda9b1a0bb05d22bd985ffc52b912544af6f79a9f' }
+    )
+    foreach ($script in $telegramScripts) {
+        $source = Join-Path (Join-Path $windowsRoot 'scripts') $script.Name
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "Required reviewed Telegram sender is missing: $($script.Name)"
+        }
+        $actual = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -cne $script.Hash) {
+            throw "Reviewed Telegram sender SHA256 mismatch: $($script.Name)"
+        }
+        Copy-Item -LiteralPath $source -Destination $runtimeStaging
+    }
     $runtimeZip = Join-Path $artifactRoot 'SwiftRuntime.zip'
     if (Test-Path -LiteralPath $runtimeZip) { Remove-Item -LiteralPath $runtimeZip }
     Add-Type -AssemblyName System.IO.Compression.FileSystem

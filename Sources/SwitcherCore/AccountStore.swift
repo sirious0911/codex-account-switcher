@@ -48,13 +48,10 @@ public actor AccountStore: AccountStoring {
             self.legacyBaseURL = legacyBaseURL
         } else {
             self.baseURL = applicationSupportURL.appending(
-                path: "Codex Account Switcher",
+                path: "Codex Account Switcher Personal",
                 directoryHint: .isDirectory
             )
-            self.legacyBaseURL = applicationSupportURL.appending(
-                path: "Codex Account Switcher Lite",
-                directoryHint: .isDirectory
-            )
+            self.legacyBaseURL = nil
         }
         self.activeHomeURL = activeHomeURL
             ?? ProcessInfo.processInfo.environment["CODEX_HOME"].map { URL(fileURLWithPath: $0) }

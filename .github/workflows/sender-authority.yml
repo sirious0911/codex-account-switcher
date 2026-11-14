@@ -1,0 +1,37 @@
+name: Sender Authority service (offline integration)
+
+on:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - 'shared-authority/service/**'
+      - 'shared-authority/offline/strict-json-frame.mjs'
+      - '.github/workflows/sender-authority.yml'
+  pull_request:
+    paths:
+      - 'shared-authority/service/**'
+      - 'shared-authority/offline/strict-json-frame.mjs'
+      - '.github/workflows/sender-authority.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  portable-authority:
+    name: ${{ matrix.os }} SQLite and signed loopback HTTPS
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Verify portable authenticated authority service, no external Telegram
+        run: node --test shared-authority/service/sender-authority.test.mjs shared-authority/service/authority-https.test.mjs

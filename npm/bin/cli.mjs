@@ -10,6 +10,7 @@ const release = `${repository}/releases/latest`;
 const info = {
   name: "Codex Account Switcher",
   author: metadata.author.name,
+  forkMaintainer: "sirious0911",
   repository,
   website: metadata.homepage,
   release,
@@ -48,7 +49,7 @@ if (["install", "update", "open", "uninstall"].includes(option) && (args.length 
     process.exitCode = 1;
   }
 } else {
-  console.log(`${info.name} by ${info.author}
+  console.log(`${info.name} — personal fork maintained by ${info.forkMaintainer}; based on ${info.author}
 Native desktop app: macOS 14+ Apple Silicon / Windows 10/11 x64.
 Source: ${repository}
 Website: ${info.website}
@@ -69,7 +70,7 @@ npm install -g runs the installer through postinstall unless lifecycle scripts a
 Local dependency installation only installs this command-line package.
 The installer has no dependencies, account access, or telemetry.
 
-Codex 账号切换器：刘朝 liuzhao1225 维护的 macOS / Windows 原生应用。
+Codex 账号切换器个人 Fork：sirious0911 维护；基于刘朝 liuzhao1225 的 MIT 原版。
 默认安装或更新 GitHub latest 发布包；已有账号数据保留。
 macOS 同时验证应用身份、版本、签名和 Gatekeeper。Windows EXE 当前未签名。`);
 }

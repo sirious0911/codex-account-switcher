@@ -1,0 +1,200 @@
+# Codex Account Switcher — shared Sender Authority service
+
+**Status (2026-11-13):** Source implementation and isolated tests. **NOT
+deployed, NOT integrated with live Windows/Mac notification senders, and NOT
+permission to transmit Telegram messages.**
+
+This service is a proposed single authority host for Windows and a future Mac
+mini to exchange **Sender ownership and immutable event reservations**.
+Both devices can continue to view their local Codex 5H/7D quotas independently.
+The service never reads Codex access tokens, Telegram Bot tokens or chat IDs.
+
+## Implemented product API
+
+Node.js 24 standard modules only (including `node:sqlite`). A single local
+SQLite WAL database holds a monotonically increasing fencing epoch, one active
+Sender lease, consumed request nonces and immutable event reservations.
+
+| Route | Signed device role | Behavior |
+| --- | --- | --- |
+| `GET /v1/status` | Viewer or Sender | Observe lease and authority time |
+| `POST /v1/lease/acquire` | Sender | First unexpired owner wins, increments epoch |
+| `POST /v1/lease/renew` | Current Sender | Refresh same epoch, max TTL 60 seconds |
+| `POST /v1/lease/release` | Current Sender | Release exact current owner+epoch |
+| `POST /v1/events/reserve` | Current Sender | Unique 64-hex event ID, persistent one-time claim |
+| `POST /v1/events/uncertain` | Current Sender | Mark uncertain, never automatically retry |
+| `GET /v1/events/<64-hex-key>` | Viewer or Sender | Observe one reservation |
+
+Requests are canonical HMAC-SHA256 signed over device ID, method, exact path,
+timestamp, random nonce, and raw body SHA256. Device identities and immutable
+Viewer/Sender roles come from **explicit server-side enrollment**, not client
+assertions. Signed requests must be within 30 seconds of the authority clock,
+and **every accepted request nonce** is inserted into SQLite before response.
+The nonce and the corresponding operation commit in the same transaction.
+Repeated/invalid nonce, unknown device, invalid HMAC, stale lease, duplicate
+event, malformed JSON, expired request and invalid role all fail closed.
+
+The HTTPS listener requires a supplied private TLS key/certificate (TLS 1.3),
+rejects signed header duplication and oversized body payloads, and binds to
+`127.0.0.1` unless an operator explicitly configures a nonloopback address
+and `allowRemote: true`. It does **not** run when its module is imported.
+
+## Explicit provisioning (future, not run by development)
+
+The following illustrates an operator-managed workflow, **not an instruction
+to perform it before Mac and Windows authentication are approved**:
+
+1. Install Node 24 on the intended Mac mini. Allocate a dedicated local
+   disk directory (no SMB/NFS DB sharing). Configure TLS with proper
+   client-side certificate/CA validation.
+2. Provision a *new, empty* database **once**, explicitly via
+   `provisionSenderAuthorityDatabase(databasePath)` from
+   `sender-authority.mjs`. Existing DBs are refused; no migration or reset.
+3. Create a private JSON config (owner-only file mode `0600` on macOS) with
+   the following **schema**. No real keys are included here:
+
+   ```json
+   {
+     "databasePath": "/private/local/path/authority.sqlite",
+     "tlsKeyPath": "/private/local/path/server-key.pem",
+     "tlsCertPath": "/private/local/path/server-cert.pem",
+     "listenHost": "127.0.0.1",
+     "allowRemote": false,
+     "port": 9443,
+     "enrollments": [
+       {"deviceId": "windows-1", "role": "sender", "hmacKeyHex": "REPLACE_WITH_UNIQUE_PRIVATE_64_HEX"},
+       {"deviceId": "mac-1", "role": "viewer", "hmacKeyHex": "REPLACE_WITH_DIFFERENT_PRIVATE_64_HEX"}
+     ]
+   }
+   ```
+
+4. After an explicit deployment approval, start with
+   `node shared-authority/service/authority-https.mjs --serve /private/config.json`.
+   Without `--serve` and a valid private config it will not bind a port.
+   An operator may later designate a verified Tailscale IP as `listenHost`,
+   but Tailscale membership **is not** per-device Sender authorization.
+5. Build Windows and Mac clients that validate the HTTPS server certificate,
+   create correctly signed requests and verify authenticated current epoch
+   **immediately before** any operation. Wire only after an independent
+   real-device safety review.
+
+## Not implemented / operation remains HOLD
+
+- **No TLS certificates, device HMAC secrets, or database were installed**
+  on the user's real machines. No service started, port opened, or Telegram
+  call made in this development task.
+- The existing Windows Telegram sender **does not call this server**.
+  Accordingly, the current Windows-only manual and session-ON send paths
+  are *not* protected by a distributed lease.
+- The Mac Sender client, trusted clock operations, key rotation/revocation,
+  authenticated server enrollment, audited backup/restore, cross-device
+  health checks and automatic post-reboot ownership are unfinished.
+- A lease and event reservation alone **do not prove exactly-once external
+  delivery**; an owner may crash or lose its lease between checking and a
+  Telegram Bot API call. A complete production gate must fence each send,
+  preserve uncertain outcomes, enforce owner handoff, and avoid automatic
+  retries after an ambiguous response.
+- Credential-bearing config files need secure backup/permissions, endpoint
+  TLS pinning and a controlled provisioning/rotation process. Do not expose
+  this prototype API to an untrusted network.
+
+## Offline verification
+
+Run locally on Windows or macOS with Node 24 and OpenSSL available:
+
+```sh
+node --test shared-authority/service/sender-authority.test.mjs shared-authority/service/authority-https.test.mjs
+```
+
+Tests create temporary SQLite databases, random synthetic HMAC keys, and a
+one-day ephemeral TLS certificate for **127.0.0.1 only**. They execute
+Windows→Mac→Windows lease/fencing handoff, immutable event dedup across
+restart, HMAC tampering/replay/clock checks, and real TLS 1.3 loopback
+requests. All fixtures are deleted; no external URL or credential is used.
+
+## Windows .NET authenticated client (unwired)
+
+The Windows native source now includes
+\`windows/CodexAccountSwitcher.Core/WindowsSenderAuthorityClient.cs\`.
+It interoperates with this server's \`CODEX_SHARED_SENDER_AUTH_V1\` HMAC
+canonical frame, unique nonce and exact JSON body. It implements all seven
+signed status/lease/event operations; a typed reply can carry owner, epoch,
+lease expiry and immutable event state. It rejects mismatched fence epochs,
+event reservation IDs, malformed/duplicate JSON, clock skew and any claim
+that the response grants Telegram sending or automatic retries.
+
+\`WindowsSenderAuthorityHttpsTransport.Create\` requires HTTPS, TLS 1.3,
+a valid system CA chain and a separately provisioned SHA256 certificate pin.
+No test credential, URI, certificate or server identity is installed on
+the user's Windows machine. The existing Windows Telegram dispatcher does
+**not** instantiate the client; it must remain default OFF for distributed
+ownership until real device provisioning, trust validation, send-time fencing,
+and independent operation review are complete.
+
+The Windows WPF regression suite exercises this product client through
+an injected, **non-network** synthetic HTTP handler and checks a reference
+HMAC vector computed by the Node authority implementation. A successful
+lease or event reservation is an *observation*, not external send permission.
+
+## macOS Swift authenticated client (unwired)
+
+\`Sources/CodexAccountSwitcher/MacSenderAuthorityClient.swift\` is a
+**macOS-native Swift/CryptoKit** implementation of the same Node 24 shared
+Sender Authority HMAC protocol. The macOS executable target includes it
+automatically but **does not construct or invoke it on startup**.
+
+- Uses the Node contract's exact canonical HMAC-SHA256 (tested against the
+  independent Node/Windows signature reference).
+- Explicit HTTPS origin, enrolled device ID, 32-byte HMAC key, and
+  32-byte certificate SHA256 pin are all required at construction.
+- macOS Security.framework trust evaluation for the certificate chain and
+  requested hostname **AND** the enrolled exact leaf DER certificate SHA256
+  are both mandatory. TLS 1.3 minimum; no redirect following.
+- Status, lease acquire/renew/release, immutable event reserve/query and
+  uncertain-outcome marking are available as single explicitly invoked
+  asynchronous requests. No automatic retry after ambiguous results.
+- Response decoding rejects oversize/invalid JSON, duplicate object keys,
+  invalid owner, stale/mismatched epoch or event key, expired lease and any
+  response asserting Telegram send authorization.
+- Swift tests under \`Tests/CodexAccountSwitcherTests/\` use injected
+  in-memory HTTPS-style responses and synthetic keys only. They never open a
+  network socket or read Keychain/DPAPI or send Telegram notifications.
+
+**Important:** Neither native client is wired to the Windows or Mac bot
+transport, live authentication keys have not been provisioned, and the
+Authority server is not deployed. Lease acquisition is NOT send permission.
+A reviewed distributed send-time fence, event reservation and real-device
+provisioning are required before live multi-host Sender operation.
+
+
+## Read-only Authority status in Windows and Mac settings
+
+Both desktop apps now have a collapsed **shared Sender Authority status**
+disclosure on the existing settings screen. This is an opt-in, explicit,
+one-shot **GET /v1/status** only, not a persistent connection, lease
+acquisition, Sender activation, event reservation or Telegram transport.
+
+- Windows uses an explicitly installed \`WindowsSenderAuthorityClient\`
+  through \`WindowsSenderAuthorityHttpsTransport.Create\`; Mac uses
+  \`MacSenderAuthorityClient\`. Both require the caller to enter an HTTPS
+  root address, enrolled device ID, 32-byte HMAC key (64 lowercase hex)
+  and independently verified server leaf certificate SHA256.
+- The HMAC field uses Windows PasswordBox / macOS SecureField and is cleared
+  immediately on query submission. No configuration is written to HKCU,
+  AppStorage, Keychain, DPAPI, disk, startup items, CLI arguments or logs.
+  The operator must enter the key again for a future query.
+- Queries are never issued during app start, account switching, settings
+  rendering, disclosure expansion, periodic quota polls or Telegram events.
+  A failed/missing enrollment is displayed as disconnected/verification
+  failure without exposing server credentials.
+- Results are deliberately labelled *read only* and *not Telegram send
+  permission*, including after a successfully authenticated owner/epoch
+  observation. The app's existing Telegram Sender settings are unaffected.
+- macOS native Swift tests and Windows native WPF tests verify disconnected,
+  active-owner, expired-lease, failed-authentication and no-auto-query cases.
+
+**Operational status remains HOLD:** this UI may be used only after a
+separately approved real-device Authority server and device enrollment
+are established. There is no distributed Sender policy in the real
+Telegram send path, no 24-hour unattended Sender process, no real Telegram
+test transmission and no deployment of the latest Windows RC.

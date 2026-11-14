@@ -1,0 +1,46 @@
+name: P3 two-device TLS relay verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/provider-extensibility
+    paths:
+      - "shared-authority/offline/quota-view-candidate-v1.mjs"
+      - "shared-authority/offline/strict-json-frame.mjs"
+      - "shared-authority/transport/quota-multi-device-relay-https.mjs"
+      - "shared-authority/transport/quota-multi-device-relay-https.test.mjs"
+      - "shared-authority/transport/quota-dual-device-service.mjs"
+      - ".github/workflows/p3-dual-device-relay.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  tls-checks:
+    name: actual-loopback-https-two-device
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout audited source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check Node and ephemeral TLS availability
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          openssl version
+      - name: Parse P3 service and relay source
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check shared-authority/transport/quota-dual-device-service.mjs
+          node --check shared-authority/transport/quota-multi-device-relay-https.mjs
+          node --check shared-authority/transport/quota-multi-device-relay-https.test.mjs
+      - name: Test actual HTTPS isolation and single-device backward compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --test \
+            shared-authority/transport/quota-relay-https.test.mjs \
+            shared-authority/transport/quota-multi-device-relay-https.test.mjs

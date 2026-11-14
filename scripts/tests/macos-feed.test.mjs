@@ -7,7 +7,7 @@ import { latestMacRelease, validateMacFeed, prepareMacFeed } from '../prepare-ma
 
 const mac = (tag, extra = {}) => ({ tag_name: tag, draft: false, prerelease: false,
   assets: [{ name: 'appcast.xml' }, { name: 'Codex-Account-Switcher-macos-arm64.dmg' }], ...extra });
-const feed = tag => `<rss><channel><item><enclosure url="https://github.com/liuzhao1225/codex-account-switcher/releases/download/${tag}/Codex-Account-Switcher-macos-arm64.dmg" sparkle:edSignature="fixture" /></item></channel></rss>`;
+const feed = tag => `<rss><channel><item><enclosure url="https://github.com/sirious0911/codex-account-switcher/releases/download/${tag}/Codex-Account-Switcher-macos-arm64.dmg" sparkle:edSignature="fixture" /></item></channel></rss>`;
 
 test('macOS ignores newer Windows releases, drafts, previews and incomplete releases', () => {
   const releases = [mac('windows-v99.0.0'), mac('macos-v3.0.0', { draft: true }),
@@ -46,4 +46,15 @@ test('unified releases win equal-version ties over historical platform releases'
   assert.equal(latestMacRelease([mac('macos-v0.1.11'), mac('v0.1.11')]).tag_name, 'v0.1.11');
   assert.equal(latestMacRelease([mac('v0.1.12'), mac('macos-v0.1.11')]).tag_name, 'v0.1.12');
   validateMacFeed(feed('v0.1.12'), 'v0.1.12');
+});
+
+
+test('new personal fork without a signed release has no macOS feed, rather than contacting upstream', async () => {
+  const requests = [];
+  const result = await prepareMacFeed(async url => {
+    requests.push(url);
+    return { ok: true, json: async () => [] };
+  }, 'unused-appcast.xml');
+  assert.equal(result, null);
+  assert.deepEqual(requests, ['https://api.github.com/repos/sirious0911/codex-account-switcher/releases?per_page=100&page=1']);
 });

@@ -1,0 +1,37 @@
+name: P3 V2 two-device R relay local TLS verification
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feature/provider-extensibility]
+    paths:
+      - "shared-authority/transport/quota-v2-multi-device-relay-https.mjs"
+      - "shared-authority/transport/quota-v2-multi-device-relay-https.test.mjs"
+      - ".github/workflows/p3-v2-loopback-relay.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  v2-loopback:
+    name: V2 read-only 127.0.0.1 TLS (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Verify OpenSSL and Node runtime
+        run: |
+          node --version
+          openssl version
+      - name: Verify V1 isolation and V2 local TLS
+        run: >-
+          node --test
+          shared-authority/offline/quota-view-candidate-v2.test.mjs
+          shared-authority/transport/quota-relay-https.test.mjs
+          shared-authority/transport/quota-multi-device-relay-https.test.mjs
+          shared-authority/transport/quota-v2-multi-device-relay-https.test.mjs

@@ -71,10 +71,16 @@ struct MacSenderAuthorityClientTests {
         let calls = await fake.evidence()
         #expect(calls.count == 7)
         #expect(Set(calls.map(\.nonce)).count == 7)
-        #expect(calls.allSatisfy({ $0.device == "windows-1" &&
-            $0.origin == "authority.invalid" &&
-            $0.signature.count == 64 &&
-            $0.timestamp == 1_794_660_000_000 }))
+        let validDevices = calls.allSatisfy { $0.device == "windows-1" }
+        let validHosts = calls.allSatisfy { $0.origin == "authority.invalid" }
+        let validSignatures = calls.allSatisfy { $0.signature.count == 64 }
+        let validTimestamps = calls.allSatisfy {
+            $0.timestamp == 1_794_660_000_000
+        }
+        #expect(validDevices)
+        #expect(validHosts)
+        #expect(validSignatures)
+        #expect(validTimestamps)
         #expect(calls.first?.body == "")
         #expect(calls[3].body ==
             "{\"epoch\":7,\"eventKey\":\"" + keyA +

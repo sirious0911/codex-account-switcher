@@ -408,7 +408,9 @@ private final class MacAuthorityPinnedTLSDelegate: NSObject,
         let policy = SecPolicyCreateSSL(true, host as CFString)
         guard SecTrustSetPolicies(trust, policy) == errSecSuccess,
               SecTrustEvaluateWithError(trust, nil),
-              let certificate = SecTrustGetCertificateAtIndex(trust, 0)
+              let certificates = SecTrustCopyCertificateChain(trust)
+                    as? [SecCertificate],
+              let certificate = certificates.first
         else {
             completionHandler(.cancelAuthenticationChallenge, nil)
             return

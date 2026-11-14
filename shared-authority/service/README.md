@@ -111,3 +111,27 @@ one-day ephemeral TLS certificate for **127.0.0.1 only**. They execute
 Windows→Mac→Windows lease/fencing handoff, immutable event dedup across
 restart, HMAC tampering/replay/clock checks, and real TLS 1.3 loopback
 requests. All fixtures are deleted; no external URL or credential is used.
+
+## Windows .NET authenticated client (unwired)
+
+The Windows native source now includes
+\`windows/CodexAccountSwitcher.Core/WindowsSenderAuthorityClient.cs\`.
+It interoperates with this server's \`CODEX_SHARED_SENDER_AUTH_V1\` HMAC
+canonical frame, unique nonce and exact JSON body. It implements all seven
+signed status/lease/event operations; a typed reply can carry owner, epoch,
+lease expiry and immutable event state. It rejects mismatched fence epochs,
+event reservation IDs, malformed/duplicate JSON, clock skew and any claim
+that the response grants Telegram sending or automatic retries.
+
+\`WindowsSenderAuthorityHttpsTransport.Create\` requires HTTPS, TLS 1.3,
+a valid system CA chain and a separately provisioned SHA256 certificate pin.
+No test credential, URI, certificate or server identity is installed on
+the user's Windows machine. The existing Windows Telegram dispatcher does
+**not** instantiate the client; it must remain default OFF for distributed
+ownership until real device provisioning, trust validation, send-time fencing,
+and independent operation review are complete.
+
+The Windows WPF regression suite exercises this product client through
+an injected, **non-network** synthetic HTTP handler and checks a reference
+HMAC vector computed by the Node authority implementation. A successful
+lease or event reservation is an *observation*, not external send permission.

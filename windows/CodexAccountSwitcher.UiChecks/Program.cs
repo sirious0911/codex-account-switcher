@@ -47,6 +47,7 @@ internal static class Program
             WindowsTelegramAutoSendSessionTest.Run(output);
             WindowsTelegramAutoRecoveryDispatcherTest.Run(output);
             WindowsTelegramSenderHandoffTest.Run(output);
+            WindowsSenderAuthorityClientTest.Run();
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(

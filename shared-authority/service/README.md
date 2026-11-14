@@ -135,3 +135,33 @@ The Windows WPF regression suite exercises this product client through
 an injected, **non-network** synthetic HTTP handler and checks a reference
 HMAC vector computed by the Node authority implementation. A successful
 lease or event reservation is an *observation*, not external send permission.
+
+## macOS Swift authenticated client (unwired)
+
+\`Sources/CodexAccountSwitcher/MacSenderAuthorityClient.swift\` is a
+**macOS-native Swift/CryptoKit** implementation of the same Node 24 shared
+Sender Authority HMAC protocol. The macOS executable target includes it
+automatically but **does not construct or invoke it on startup**.
+
+- Uses the Node contract's exact canonical HMAC-SHA256 (tested against the
+  independent Node/Windows signature reference).
+- Explicit HTTPS origin, enrolled device ID, 32-byte HMAC key, and
+  32-byte certificate SHA256 pin are all required at construction.
+- macOS Security.framework trust evaluation for the certificate chain and
+  requested hostname **AND** the enrolled exact leaf DER certificate SHA256
+  are both mandatory. TLS 1.3 minimum; no redirect following.
+- Status, lease acquire/renew/release, immutable event reserve/query and
+  uncertain-outcome marking are available as single explicitly invoked
+  asynchronous requests. No automatic retry after ambiguous results.
+- Response decoding rejects oversize/invalid JSON, duplicate object keys,
+  invalid owner, stale/mismatched epoch or event key, expired lease and any
+  response asserting Telegram send authorization.
+- Swift tests under \`Tests/CodexAccountSwitcherTests/\` use injected
+  in-memory HTTPS-style responses and synthetic keys only. They never open a
+  network socket or read Keychain/DPAPI or send Telegram notifications.
+
+**Important:** Neither native client is wired to the Windows or Mac bot
+transport, live authentication keys have not been provisioned, and the
+Authority server is not deployed. Lease acquisition is NOT send permission.
+A reviewed distributed send-time fence, event reservation and real-device
+provisioning are required before live multi-host Sender operation.

@@ -134,7 +134,8 @@ public partial class App : Application
                 QueueTelegramConnectivityTest,
                 () => autoTelegramSession.Armed,
                 ChangeAutomaticTelegramSession,
-                StopWindowsTelegramSenderForHandoff); MainWindow = window;
+                StopWindowsTelegramSenderForHandoff,
+                ProbeSharedAuthorityStatusReadOnlyAsync); MainWindow = window;
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -287,6 +288,42 @@ public partial class App : Application
         }
         // Nothing is sent by route creation itself. Automatic dispatch
         // is explicitly gated, separate, and disabled by default.
+    }
+
+    private static async Task<string> ProbeSharedAuthorityStatusReadOnlyAsync(
+        string origin, string deviceId, string hmacKeyHex, string pinHex)
+    {
+        // Explicit one-shot GET, initiated solely by a settings-page click.
+        // Never grant a lease, reserve an event or invoke any Telegram bot.
+        byte[]? key = null;
+        try
+        {
+            if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) ||
+                !WindowsSenderAuthorityClient.ValidAuthorityUri(uri) ||
+                !WindowsSenderAuthorityClient.ValidDeviceId(deviceId) ||
+                hmacKeyHex.Length != 64 ||
+                !hmacKeyHex.All(c => c is >= '0' and <= '9' or
+                                        >= 'a' and <= 'f'))
+                return "Authority: 기기 주소 또는 인증 입력 불일치 · 조회만 가능";
+
+            key = Convert.FromHexString(hmacKeyHex);
+            using var http = WindowsSenderAuthorityHttpsTransport.Create(uri, pinHex);
+            using var reader = new WindowsSenderAuthorityClient(uri, deviceId, key, http);
+            var observed = await reader.StatusAsync();
+            return WindowsAuthorityReadOnlyStatus.Format(observed);
+        }
+        catch (Exception ex) when (ex is ArgumentException or
+            HttpRequestException or IOException or ObjectDisposedException or
+            InvalidOperationException)
+        {
+            // Never leak the URI, HMAC secret, certificate pin or response.
+            return "Authority: 구성·연결·인증 검증 실패 · 조회만 가능";
+        }
+        finally
+        {
+            if (key is not null)
+                CryptographicOperations.ZeroMemory(key);
+        }
     }
 
     private WindowsTelegramHandoffStatus StopWindowsTelegramSenderForHandoff()

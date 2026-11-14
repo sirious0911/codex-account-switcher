@@ -14,6 +14,16 @@ struct SettingsView: View {
     @AppStorage("TelegramFiveHourRequested") private var telegramFiveHourRequested = true
     @AppStorage("TelegramWeeklyRequested") private var telegramWeeklyRequested = true
 
+    // Deliberately transient, never AppStorage/Keychain/host auto-start.
+    // No Authority network request is made before explicit button press.
+    @State private var authorityOrigin = ""
+    @State private var authorityDeviceID = ""
+    @State private var authorityHmacKey = ""
+    @State private var authorityCertificatePin = ""
+    @State private var authorityReading = false
+    @State private var authorityStatus =
+        "Authority: 미연결 · 수동 조회만 가능 · Telegram 송신 권한 없음"
+
     var body: some View {
         VStack(spacing: 0) {
             PopoverHeader(
@@ -155,6 +165,8 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .modifier(SettingsDetail())
 
+            authorityReadOnlySection
+
             sectionLabel("settings_updates")
             settingRow("automatically_check_updates") {
                 settingSwitch("automatically_check_updates", isOn: Binding(
@@ -190,6 +202,73 @@ struct SettingsView: View {
         .font(.system(size: 13))
         .controlSize(.small)
         .onAppear { model.refreshLaunchAtLoginStatus() }
+        .onDisappear {
+            authorityHmacKey = ""
+            authorityCertificatePin = ""
+        }
+    }
+
+    private var authorityReadOnlySection: some View {
+        DisclosureGroup("공통 Sender Authority · 현재 소유권 조회 (읽기 전용)") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("서버와 등록된 기기 정보가 준비된 경우에만 한 번 조회합니다. " +
+                     "이 결과로 Sender가 활성화되거나 Telegram을 보내지 않습니다.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                TextField("HTTPS Authority 서버", text: $authorityOrigin)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("HTTPS Authority 서버")
+                TextField("등록된 장치 ID", text: $authorityDeviceID)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("등록된 장치 ID")
+                SecureField("장치 HMAC 키 64자리 (저장 안 함)",
+                            text: $authorityHmacKey)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("장치 HMAC 키 64자리 (저장 안 함)")
+                TextField("서버 인증서 SHA256 64자리",
+                          text: $authorityCertificatePin)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("서버 인증서 SHA256 64자리")
+                Text(authorityStatus)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Authority 상태 1회 조회 (발송 없음)") {
+                    inspectAuthorityReadOnlyOnce()
+                }
+                .buttonStyle(.bordered)
+                .disabled(authorityReading)
+            }
+            .padding(.top, 8)
+        }
+        .modifier(SettingsDetail())
+    }
+
+    private func inspectAuthorityReadOnlyOnce() {
+        guard !authorityReading else { return }
+        let origin = authorityOrigin.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        let device = authorityDeviceID.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        let hmacKey = authorityHmacKey
+        let certPin = authorityCertificatePin.trimmingCharacters(
+            in: .whitespacesAndNewlines)
+        authorityHmacKey = ""
+        guard let client = MacSenderAuthorityClient(
+            origin: origin, deviceID: device,
+            keyHex: hmacKey, certificateSHA256: certPin)
+        else {
+            authorityStatus = "Authority: 입력·인증 정보 검증 불가 · 요청 없음"
+            return
+        }
+        authorityReading = true
+        authorityStatus = "Authority: 인증된 상태 조회 중 · Telegram 발송 없음"
+        Task { @MainActor in
+            let result = await client.status()
+            client.dispose()
+            authorityStatus = MacAuthorityReadOnlyStatus.describe(result)
+            authorityReading = false
+        }
     }
 
     private var telegramRoleSummary: String {

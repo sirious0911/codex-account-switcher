@@ -165,3 +165,36 @@ transport, live authentication keys have not been provisioned, and the
 Authority server is not deployed. Lease acquisition is NOT send permission.
 A reviewed distributed send-time fence, event reservation and real-device
 provisioning are required before live multi-host Sender operation.
+
+
+## Read-only Authority status in Windows and Mac settings
+
+Both desktop apps now have a collapsed **shared Sender Authority status**
+disclosure on the existing settings screen. This is an opt-in, explicit,
+one-shot **GET /v1/status** only, not a persistent connection, lease
+acquisition, Sender activation, event reservation or Telegram transport.
+
+- Windows uses an explicitly installed \`WindowsSenderAuthorityClient\`
+  through \`WindowsSenderAuthorityHttpsTransport.Create\`; Mac uses
+  \`MacSenderAuthorityClient\`. Both require the caller to enter an HTTPS
+  root address, enrolled device ID, 32-byte HMAC key (64 lowercase hex)
+  and independently verified server leaf certificate SHA256.
+- The HMAC field uses Windows PasswordBox / macOS SecureField and is cleared
+  immediately on query submission. No configuration is written to HKCU,
+  AppStorage, Keychain, DPAPI, disk, startup items, CLI arguments or logs.
+  The operator must enter the key again for a future query.
+- Queries are never issued during app start, account switching, settings
+  rendering, disclosure expansion, periodic quota polls or Telegram events.
+  A failed/missing enrollment is displayed as disconnected/verification
+  failure without exposing server credentials.
+- Results are deliberately labelled *read only* and *not Telegram send
+  permission*, including after a successfully authenticated owner/epoch
+  observation. The app's existing Telegram Sender settings are unaffected.
+- macOS native Swift tests and Windows native WPF tests verify disconnected,
+  active-owner, expired-lease, failed-authentication and no-auto-query cases.
+
+**Operational status remains HOLD:** this UI may be used only after a
+separately approved real-device Authority server and device enrollment
+are established. There is no distributed Sender policy in the real
+Telegram send path, no 24-hour unattended Sender process, no real Telegram
+test transmission and no deployment of the latest Windows RC.

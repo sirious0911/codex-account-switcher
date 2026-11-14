@@ -48,6 +48,7 @@ internal static class Program
             WindowsTelegramAutoRecoveryDispatcherTest.Run(output);
             WindowsTelegramSenderHandoffTest.Run(output);
             WindowsSenderAuthorityClientTest.Run();
+            WindowsAuthorityReadOnlyStatusTest.Run();
             WindowsTelegramOfflineOneShotCoordinatorTest.Run();
             var app = new App(false); app.InitializeComponent();
             var appFields = typeof(App).GetFields(
@@ -462,11 +463,86 @@ internal static class Program
             VerifyTelegramConnectivityStageUi(output);
             VerifyTelegramAutomaticSessionUi(output);
             VerifyTelegramSenderHandoffUi(output);
+            VerifyAuthorityReadOnlyUi(output);
             Console.WriteLine("PASS: native taskbar window, focus persistence, compact home, full-row confirmation, management, immediate settings and optional five-hour usage.");
             Console.WriteLine(output);
             return 0;
         } catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
     }
+    private static void VerifyAuthorityReadOnlyUi(string output)
+    {
+        var calls = 0;
+        string? passedKey = null;
+        var window = new MainWindow(new FixtureClient(),
+            authorityReadOnly: (origin, device, secret, pin) =>
+            {
+                calls++;
+                passedKey = secret;
+                Assert(origin == "https://authority.invalid:9443/" &&
+                    device == "windows-1" &&
+                    pin == new string('b', 64),
+                    "Only explicitly entered HTTPS status enrollment is passed.");
+                return Task.FromResult(
+                    "Authority: 조회 시점 Sender mac-1 · epoch 4" +
+                    " · 조회 전용 · Telegram 발송 권한 없음");
+            });
+        window.Navigate("settings");
+        Render(window, Path.Combine(output, "authority-settings-default-disconnected.png"));
+        Assert(calls == 0 && All<Expander>(window).Any(e =>
+            System.Windows.Automation.AutomationProperties.GetName(e) ==
+                "공통 Sender Authority 읽기 전용 상태"),
+            "Authority diagnostic must be visible but must never make startup requests.");
+
+        var disclosure = All<Expander>(window).Single(e =>
+            System.Windows.Automation.AutomationProperties.GetName(e) ==
+                "공통 Sender Authority 읽기 전용 상태");
+        disclosure.IsExpanded = true;
+        Render(window, Path.Combine(output, "authority-settings-manual-expanded.png"));
+        var url = All<TextBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "HTTPS Authority 서버");
+        var device = All<TextBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "등록된 장치 ID");
+        var pin = All<TextBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "서버 인증서 SHA256 64자리");
+        var key = All<PasswordBox>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "장치 HMAC 키 64자리 (표시·저장 안 함)");
+        var fetch = All<Button>(window).Single(t =>
+            System.Windows.Automation.AutomationProperties.GetName(t) ==
+                "Authority 상태 1회 조회 (발송 없음)");
+        Assert(calls == 0,
+            "Expanding the Authority pane or inspecting inputs must be read-only.");
+        url.Text = "https://authority.invalid:9443/";
+        device.Text = "windows-1";
+        pin.Text = new string('b', 64);
+        key.Password = "short";
+        fetch.RaiseEvent(new RoutedEventArgs(
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Assert(calls == 0 && key.Password.Length == 0,
+            "Incomplete credentials must be cleared before any request.");
+        key.Password = new string('a', 64);
+        fetch.RaiseEvent(new RoutedEventArgs(
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+        Assert(calls == 1 && passedKey == new string('a', 64) &&
+            key.Password.Length == 0 &&
+            All<TextBlock>(window).Any(text =>
+                text.Text.Contains("조회 시점 Sender mac-1")),
+            "Only an explicit user click triggers one signed GET status request.");
+        window.CloseForExit();
+
+        var detached = new MainWindow(new FixtureClient());
+        detached.Navigate("settings");
+        Render(detached, Path.Combine(output, "authority-unwired-no-credential-ui.png"));
+        Assert(!All<Expander>(detached).Any(e =>
+            System.Windows.Automation.AutomationProperties.GetName(e) ==
+                "공통 Sender Authority 읽기 전용 상태"),
+            "A non-enrolled / synthetic window must not expose a live query action.");
+        detached.CloseForExit();
+    }
+
     private static void VerifyTelegramSenderHandoffUi(string output)
     {
         var calls = 0;

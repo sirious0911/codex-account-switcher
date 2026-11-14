@@ -30,6 +30,9 @@ public sealed class MainWindow : Window
     private readonly Func<bool> telegramAutomaticSessionArmed;
     private readonly Func<bool, bool, bool>? telegramAutomaticSessionAction;
     private readonly Func<WindowsTelegramHandoffStatus>? telegramWindowsHandoffAction;
+    private readonly Func<string, string, string, string, Task<string>>?
+        authorityStatusReadOnlyProbe;
+    private bool authorityReadInProgress;
     private WindowsTelegramApprovalRow? selectedTelegramApproval;
     private string? telegramApprovalResult;
     private bool telegramApprovalBusy;
@@ -67,7 +70,8 @@ public sealed class MainWindow : Window
         Func<TelegramNotificationLane, string>? telegramTestStage = null,
         Func<bool>? telegramAutoArmed = null,
         Func<bool, bool, bool>? telegramAutoAction = null,
-        Func<WindowsTelegramHandoffStatus>? telegramHandoff = null)
+        Func<WindowsTelegramHandoffStatus>? telegramHandoff = null,
+        Func<string, string, string, string, Task<string>>? authorityReadOnly = null)
     {
         this.client = client; this.native = native ?? new NativeSettings();
         history = monitorHistory ?? (() => []);
@@ -86,6 +90,7 @@ public sealed class MainWindow : Window
         telegramAutomaticSessionArmed = telegramAutoArmed ?? (() => false);
         telegramAutomaticSessionAction = telegramAutoAction;
         telegramWindowsHandoffAction = telegramHandoff;
+        authorityStatusReadOnlyProbe = authorityReadOnly;
         Icon = System.Windows.Media.Imaging.BitmapFrame.Create(App.IconUri);
         Title = "Codex Account Switcher Personal"; Width = 420; SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.SingleBorderWindow; ResizeMode = ResizeMode.CanMinimize;
@@ -978,6 +983,88 @@ public sealed class MainWindow : Window
             10.5, muted: true);
         telegramState.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(telegramState);
+        if (authorityStatusReadOnlyProbe is not null)
+        {
+            // Explicit temporary credentials: not HKCU, files, auto-start,
+            // Codex profile settings or Telegram Sender preferences.
+            var authorityPanel = new StackPanel {
+                Margin = new Thickness(4, 8, 4, 10)
+            };
+            var authorityEndpoint = new TextBox {
+                MaxLength = 256,
+                ToolTip = "https:// 인증된 Authority 서버 주소 (루트만)"
+            };
+            var authorityDevice = new TextBox { MaxLength = 48 };
+            var authorityKey = new PasswordBox { MaxLength = 64 };
+            var authorityPin = new TextBox { MaxLength = 64 };
+            void AddAuthorityField(string title, Control control)
+            {
+                var label = Text(title, 10.5, muted: true);
+                label.Margin = new Thickness(0, 5, 0, 2);
+                authorityPanel.Children.Add(label);
+                AutomationProperties.SetName(control, title);
+                authorityPanel.Children.Add(control);
+            }
+            AddAuthorityField("HTTPS Authority 서버", authorityEndpoint);
+            AddAuthorityField("등록된 장치 ID", authorityDevice);
+            AddAuthorityField("장치 HMAC 키 64자리 (표시·저장 안 함)", authorityKey);
+            AddAuthorityField("서버 인증서 SHA256 64자리", authorityPin);
+
+            var status = Text(
+                "Authority: 미연결 · 수동 조회만 가능 · Telegram 송신 권한 없음",
+                10.5, muted: true);
+            status.Margin = new Thickness(0, 9, 0, 7);
+            status.TextWrapping = TextWrapping.Wrap;
+            authorityPanel.Children.Add(status);
+            Button? fetch = null;
+            fetch = Button("Authority 상태 1회 조회 (발송 없음)", () => {
+                if (authorityReadInProgress || IsBusy) return;
+                var origin = authorityEndpoint.Text.Trim();
+                var id = authorityDevice.Text.Trim();
+                var secret = authorityKey.Password;
+                var pin = authorityPin.Text.Trim();
+                authorityKey.Clear(); // never retain credential in the view
+                if (origin.Length == 0 || id.Length == 0 ||
+                    secret.Length != 64 || pin.Length != 64)
+                {
+                    status.Text = "Authority: 입력 미완료 · 네트워크 요청 없음";
+                    return;
+                }
+                authorityReadInProgress = true;
+                fetch!.IsEnabled = false;
+                status.Text = "Authority: 인증된 상태 조회 중 · Telegram 발송 없음";
+                _ = InspectAuthorityOnceAsync(origin, id, secret, pin);
+            });
+            async Task InspectAuthorityOnceAsync(
+                string origin, string id, string key, string pin)
+            {
+                try
+                {
+                    var result = await authorityStatusReadOnlyProbe(
+                        origin, id, key, pin);
+                    status.Text = result;
+                }
+                catch
+                {
+                    status.Text =
+                        "Authority: 조회 예외 · Telegram 발송 권한 없음";
+                }
+                finally
+                {
+                    authorityReadInProgress = false;
+                    fetch!.IsEnabled = !IsBusy;
+                }
+            }
+            authorityPanel.Children.Add(fetch);
+            var authorityDisclosure = new Expander {
+                Header = "공통 Sender Authority · 현재 소유권 조회 (읽기 전용)",
+                IsExpanded = false,
+                Content = authorityPanel,
+                Margin = new Thickness(0, 12, 0, 8)
+            };
+            AutomationProperties.SetName(authorityDisclosure, "공통 Sender Authority 읽기 전용 상태");
+            settings.Children.Add(authorityDisclosure);
+        }
         var localSenderStatus = Text(localTelegramSenderStatus(), 10.5, muted: true);
         localSenderStatus.TextWrapping = TextWrapping.Wrap;
         settings.Children.Add(localSenderStatus);

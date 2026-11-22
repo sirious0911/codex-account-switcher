@@ -90,11 +90,57 @@ public partial class App : Application
     private MainWindow? window;
     private DispatcherTimer? updates;
     private bool exiting;
+    private bool step2ReadOnlyPreview;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         if (!startRuntime) return;
+        if (e.Args.Contains("--step2-taskbar-no-send", StringComparer.Ordinal))
+        {
+            step2ReadOnlyPreview = true;
+            if (e.Args.Length != 1) { Shutdown(2); return; }
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            int code = 2;
+            try
+            {
+                using var preview = new TaskbarQuotaPanel(() => { }, () => { }, () => false);
+                preview.Start();
+                var deadline = System.Diagnostics.Stopwatch.StartNew();
+                while (!preview.IsVisibleOnTaskbar && deadline.Elapsed < TimeSpan.FromSeconds(16))
+                    await Task.Delay(150);
+                if (preview.IsVisibleOnTaskbar) code = 0;
+            }
+            catch (Exception error) when (error is IOException or InvalidOperationException or
+                UnauthorizedAccessException or System.ComponentModel.Win32Exception)
+            { }
+            Shutdown(code);
+            return;
+        }
+        bool settingsPreview = e.Args.Contains("--step2-settings-no-send", StringComparer.Ordinal);
+        if (settingsPreview || e.Args.Contains("--step2-readonly-preview", StringComparer.Ordinal))
+        {
+            step2ReadOnlyPreview = true;
+            if (e.Args.Length != 1) { Shutdown(2); return; }
+            try
+            {
+                var preview = settingsPreview ? Step2ReadOnlyPreview.CreateSettings() : Step2ReadOnlyPreview.Create();
+                MainWindow = preview;
+                ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                preview.Show();
+                await Dispatcher.InvokeAsync(() => preview.UpdateLayout(), DispatcherPriority.Render);
+                bool rendered = preview.IsVisible && preview.ActualWidth >= 400 && preview.ActualHeight >= 200;
+                if (preview is MainWindow settings) settings.CloseForExit();
+                if (!rendered) { Shutdown(2); return; }
+                Shutdown(0);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                InvalidOperationException or System.Text.Json.JsonException or ArgumentException)
+            {
+                Shutdown(2);
+            }
+            return;
+        }
         if (e.Args.Contains("--self-test")) { await SelfTestAsync(); return; }
         try {
             var dataPath = Environment.GetEnvironmentVariable("CODEX_SWITCHER_DATA_HOME")
@@ -1170,6 +1216,7 @@ public partial class App : Application
         Shutdown(exitCode);
     }
     protected override void OnExit(ExitEventArgs e) {
+        if (step2ReadOnlyPreview) { base.OnExit(e); return; }
         codexDueDispatcher?.Disable();
         codexOwnerAutoStart?.Dispose();
         remoteQuitChannel?.Dispose();

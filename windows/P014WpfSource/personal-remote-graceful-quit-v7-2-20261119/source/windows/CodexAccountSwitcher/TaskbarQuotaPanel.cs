@@ -154,6 +154,7 @@ internal sealed class TaskbarQuotaPanel : IDisposable
         Refresh();
     }
 
+    internal bool IsVisibleOnTaskbar => host?.IsAttached == true && hostedWindow?.IsVisible == true;
     internal MiniBarReadout CurrentReadout => state.Read(DateTimeOffset.UtcNow);
     internal NonWeeklyUsage? CurrentNonWeeklyUsage => alternateQuota;
 

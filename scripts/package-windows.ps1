@@ -35,6 +35,24 @@ try {
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtimeStaging }
     Get-ChildItem -LiteralPath (Join-Path $windowsRoot 'licenses') -Filter '*.txt' -File |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $runtimeStaging }
+    # Required NON-SECRET Telegram sender source. Match reviewed runtime
+    # constants: WindowsPackagedTelegramScripts.MonitorSha256/AlertSha256.
+    # A missing or modified source must fail packaging before ZIP creation.
+    $telegramSources = @(
+        @{ Name='send-fivehour100-existing-monitor-bot.ps1'; Hash='5207d4c4c4d342fa26d32561945f889a11aec9550b0c10735e030211a58da61f' },
+        @{ Name='send-weekly100-existing-alert-bot.ps1'; Hash='a07643b41bee7551631b3bcc64bb292b3d621acc25febb5d9de3bea62fd028c7' }
+    )
+    foreach ($script in $telegramSources) {
+        $source = Join-Path (Join-Path $windowsRoot 'scripts') $script.Name
+        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+            throw "HOLD_STEP1_REQUIRED_TELEGRAM_SCRIPT_MISSING: $($script.Name)"
+        }
+        $actual = (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($actual -cne $script.Hash) {
+            throw "HOLD_STEP1_REVIEWED_TELEGRAM_SCRIPT_HASH: $($script.Name)"
+        }
+        Copy-Item -LiteralPath $source -Destination $runtimeStaging
+    }
     $runtimeZip = Join-Path $artifactRoot 'SwiftRuntime.zip'
     if (Test-Path -LiteralPath $runtimeZip) { Remove-Item -LiteralPath $runtimeZip }
     Add-Type -AssemblyName System.IO.Compression.FileSystem

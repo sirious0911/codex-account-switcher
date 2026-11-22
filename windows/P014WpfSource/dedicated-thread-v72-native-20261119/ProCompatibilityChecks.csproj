@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="DedicatedThreadV72Candidate.csproj" />
+    <ProjectReference Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher.Core/CodexAccountSwitcher.Core.csproj" />
+    <Compile Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/ProPlanCompatibilityChecks/Program.cs" />
+  </ItemGroup>
+</Project>

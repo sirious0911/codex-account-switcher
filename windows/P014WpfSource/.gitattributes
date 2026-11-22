@@ -1,0 +1,4 @@
+# Preserve exact bytes of the frozen reviewed source bundle. A line-ending
+# conversion would invalidate pinned JS bundle SHA256 verification.
+# Binary resources are also preserved unchanged.
+* -text

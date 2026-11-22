@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <AssemblyName>Codex-Account-Switcher-windows-x64</AssemblyName>
+    <SwiftRuntimeArchive Condition="'$(SwiftRuntimeArchive)' == ''">../codex-auto-greeting-stage-20261120/SwiftRuntime.zip</SwiftRuntimeArchive>
+    <ApplicationIcon>../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/app.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher.Core/CodexAccountSwitcher.Core.csproj" />
+    <PackageReference Include="Deskband11Lib.Wpf" Version="1.4.2" />
+    <Compile Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/*.cs"
+      Exclude="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/MainWindow.cs;../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/App.xaml.cs" />
+    <Compile Include="MainWindow.cs" />
+    <Compile Include="App.xaml.cs" />
+    <Compile Include="SwitcherActiveProfileReadOnlyChannel.cs" />
+    <Compile Include="DedicatedResetDeadlineObserver.cs" />
+    <Compile Include="DedicatedResetBindingPreflight.cs" />
+    <Compile Include="CodexDueDispatchBridge.cs" />
+    <Compile Include="CodexDueLocalPipeClient.cs" />
+    <Compile Include="CodexDueIpcEnrollment.cs" />
+    <Compile Include="CodexWindowsOwnerAutoStart.cs" />
+    <Compile Include="WindowsOwnerReadOnlyAdmission.cs" />
+    <Compile Include="WindowsAdmissionFileEvidence.cs" />
+    <Compile Include="WindowsAdmissionRelativeReader.cs" />
+    <Compile Include="WindowsAdmissionFixtureFlow.cs" />
+    <Compile Include="CodexWindowsOwnerRecoveryGate.cs" />
+    <Compile Include="WindowsReviewedOwnerJsBundle.cs" />
+    <Compile Include="CodexChatReservationPreview.cs" />
+    <Compile Include="CodexNativeCompletionEvidence.cs" />
+    <Compile Include="../dedicated-thread-authority-client-20261120/CodexChatSignedAuthorityClient.cs" Link="CodexChatSignedAuthorityClient.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/CodexExistingThreadFencedCoordinator.cs" Link="CodexExistingThreadFencedCoordinator.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/CodexChatAuthorityDispatchGate.cs" Link="CodexChatAuthorityDispatchGate.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/WindowsCodexJobSupervisor.cs" Link="WindowsCodexJobSupervisor.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/WindowsReviewedDotNetBundle.cs" Link="WindowsReviewedDotNetBundle.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/WindowsCodexResetOrchestrator.cs" Link="WindowsCodexResetOrchestrator.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/CodexAutoSendDraftStore.cs" Link="CodexAutoSendDraftStore.cs" />
+    <Compile Include="../dedicated-native-send-worker-20261120/InitializedCodexConstrainedSendSession.cs" Link="InitializedCodexConstrainedSendSession.cs" />
+    <Compile Include="../dedicated-thread-integrated-20261119/PersonalExistingThreadContext.cs" />
+    <Compile Include="../dedicated-thread-integrated-20261119/DedicatedThreadPickerPanel.cs" />
+    <Compile Include="../dedicated-thread-settings-ui-20261119/GlobalUsings.cs" />
+    <Compile Include="../dedicated-thread-cycle-starter-20261119/DedicatedThreadWakeup.cs" />
+    <Compile Include="../dedicated-thread-cycle-starter-20261119/DedicatedThreadBinding.cs" />
+    <Compile Include="../dedicated-thread-cycle-starter-20261119/ExistingCodexThreadRpc.cs" />
+    <Compile Include="../dedicated-thread-cycle-starter-20261119/VerifiedExistingThreadPicker.cs" />
+    <Compile Include="../dedicated-thread-cycle-starter-20261119/InitializedCodexReadOnlySession.cs" />
+    <ApplicationDefinition Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/App.xaml" Link="App.xaml" />
+    <Resource Include="../personal-remote-graceful-quit-v7-2-20261119/source/assets/account-switcher-logo.png" Link="logo.png" />
+    <Resource Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/app.ico" Link="app.ico" />
+    <Resource Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/tray-light.ico" Link="tray-light.ico" />
+    <Resource Include="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/tray-dark.ico" Link="tray-dark.ico" />
+    <EmbeddedResource Include="../personal-remote-graceful-quit-v7-2-20261119/source/LICENSE" Link="LICENSE.txt" />
+    <EmbeddedResource Include="$(SwiftRuntimeArchive)" LogicalName="SwitcherRuntime.zip"
+      Condition="Exists('$(SwiftRuntimeArchive)')" />
+  </ItemGroup>
+  <!-- A normal source-only Build intentionally works without Swift. An
+       actual PublishSingleFile package must NEVER silently omit it. -->
+  <Target Name="P019RequireSwiftArchiveOnPublish"
+          BeforeTargets="PrepareForPublish"
+          Condition="'$(PublishSingleFile)' == 'true'">
+    <Error Condition="'$(SwiftRuntimeArchive)' == '' Or !Exists('$(SwiftRuntimeArchive)')"
+           Text="HOLD_P019_SWIFT_RUNTIME_ARCHIVE_MISSING: single-file publishing requires an explicit existing SwiftRuntimeArchive. Build-only review is allowed." />
+    <Error Condition="'$(SwiftRuntimeExpectedSha256)' == ''"
+           Text="HOLD_P019_SWIFT_RUNTIME_INDEPENDENT_HASH_REQUIRED: supply the independently reviewed exact ZIP SHA256." />
+    <!-- This candidate has verified byte-identical output only when all
+         component projects receive the same canonical Windows PathMap. -->
+    <Error Condition="'$(PathMap)' == ''"
+           Text="HOLD_P019_DETERMINISTIC_WINDOWS_PATHMAP_REQUIRED: provide a canonical Windows-backslash source-root PathMap as an explicit global publish property." />
+    <Error Condition="'$(ContinuousIntegrationBuild)' != 'true' Or '$(Deterministic)' != 'true'"
+           Text="HOLD_P019_DETERMINISTIC_BUILD_FLAGS_REQUIRED: ContinuousIntegrationBuild=true and Deterministic=true are required." />
+    <GetFileHash Files="$(SwiftRuntimeArchive)" Algorithm="SHA256"
+                 Condition="Exists('$(SwiftRuntimeArchive)')">
+      <Output TaskParameter="Items" ItemName="_P019SwiftRuntimeHash" />
+    </GetFileHash>
+    <Error Condition="'@(_P019SwiftRuntimeHash->'%(FileHash)')' != '$(SwiftRuntimeExpectedSha256)'"
+           Text="HOLD_P019_SWIFT_RUNTIME_HASH_MISMATCH: the exact archive bytes must match the separately supplied SHA256." />
+  </Target>
+</Project>

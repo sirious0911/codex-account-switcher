@@ -12,7 +12,12 @@ internal sealed class WindowsAmanoProductionOutbox
 {
     private const int MaxItems = 256;
     private const long MaxFileBytes = 512 * 1024;
-    private const int Schema = 1;
+    // Version 1 remains readable for legacy ordinary notifications.
+    // The first important-5H row permanently upgrades the ledger to v2.
+    // Unmodified older V7.2 binaries accept ONLY v1 and therefore HOLD
+    // instead of silently treating an urgent row as a Monitor Bot event.
+    private const int LegacySchema = 1;
+    private const int ImportantSchema = 2;
     private readonly string directory;
     private readonly string target;
     private readonly object sync = new();
@@ -62,7 +67,8 @@ internal sealed class WindowsAmanoProductionOutbox
             .OrderByDescending(item => item.ObservedAt)
             .Take(10)
             .Select(item => new WindowsTelegramApprovalRow(
-                item.Lane, item.EventKey, item.ObservedAt, item.IsTest))
+                item.Lane, item.EventKey, item.ObservedAt, item.IsTest,
+                item.FiveHourZeroImportant))
             .ToArray();
     }
 
@@ -80,14 +86,53 @@ internal sealed class WindowsAmanoProductionOutbox
     /// Stage only a newly confirmed recovery event which already passed the
     /// configured bot-lane and sender-intent checks. This is NOT a send.
     /// </summary>
+    // A 5H zero event can be STAGED but cannot be dispatched by the
+    // existing 5H Monitor/7D Alert sender. Same (lane,key) namespace
+    // guarantees the normal and urgent destinations cannot both queue.
+    internal bool StageFiveHourZeroImportant(
+        FiveHour100Alert? alert,
+        WindowsExistingAmanoBotInvocation? verifiedImportantRoute,
+        TelegramNotificationPreferences? preferences)
+    {
+        var important = QuotaTelegramBotRouting.ForFiveHourZeroEscalation(alert);
+        if (alert is null || important is null ||
+            verifiedImportantRoute is null ||
+            verifiedImportantRoute.IsTest || verifiedImportantRoute.Silent ||
+            verifiedImportantRoute.ActualTelegramSendAuthorized ||
+            verifiedImportantRoute.EventKey != alert.Key ||
+            verifiedImportantRoute.Message != important.Text ||
+            !string.Equals(
+                Path.GetFileName(verifiedImportantRoute.ReviewedCodexScriptPath),
+                WindowsPackagedTelegramScripts.FiveHourZeroAlertScriptName,
+                StringComparison.Ordinal))
+            return false;
+        return StageCore(TelegramNotificationLane.FiveHourRecovery, alert.Key,
+            alert.ObservedAt, matchingPreparedRoute: true, preferences,
+            isTest: false, fiveHourZeroImportant: true);
+    }
+
     internal bool Stage(
         TelegramNotificationLane lane,
         string? eventKey,
         DateTimeOffset observedAt,
         bool matchingPreparedRoute,
         TelegramNotificationPreferences? preferences,
-        bool isTest = false)
+        bool isTest = false) =>
+        StageCore(lane, eventKey, observedAt, matchingPreparedRoute,
+            preferences, isTest, fiveHourZeroImportant: false);
+
+    private bool StageCore(
+        TelegramNotificationLane lane,
+        string? eventKey,
+        DateTimeOffset observedAt,
+        bool matchingPreparedRoute,
+        TelegramNotificationPreferences? preferences,
+        bool isTest,
+        bool fiveHourZeroImportant)
     {
+        if (fiveHourZeroImportant &&
+            (lane != TelegramNotificationLane.FiveHourRecovery || isTest))
+            return false;
         var allow = lane switch
         {
             TelegramNotificationLane.FiveHourRecovery =>
@@ -112,7 +157,12 @@ internal sealed class WindowsAmanoProductionOutbox
                 return false; // no eviction of uncertain or reserved events
             state.Items.Add(new WindowsAmanoOutboxItem(
                 lane, eventKey!, observedAt, DateTimeOffset.UtcNow,
-                WindowsAmanoOutboxStatus.AwaitingApproval, null, null, isTest));
+                WindowsAmanoOutboxStatus.AwaitingApproval, null, null,
+                isTest, fiveHourZeroImportant));
+            // Never downgrade after an urgent 5H row, including after
+            // it reaches a terminal status. This protects rollbacks.
+            if (fiveHourZeroImportant)
+                state.SchemaVersion = ImportantSchema;
             Save(state);
             return true;
         }
@@ -178,6 +228,7 @@ internal sealed class WindowsAmanoProductionOutbox
             var state = Load();
             var index = state.Items.FindIndex(item =>
                 item.Lane == lane && item.EventKey == eventKey &&
+                !item.FiveHourZeroImportant &&
                 item.Status == WindowsAmanoOutboxStatus.AwaitingApproval);
             if (index < 0) return null;
             var reserved = state.Items[index] with
@@ -250,13 +301,19 @@ internal sealed class WindowsAmanoProductionOutbox
         using var input = new FileStream(target, FileMode.Open,
             FileAccess.Read, FileShare.Read);
         var state = JsonSerializer.Deserialize<WindowsAmanoOutboxState>(input);
-        if (state is null || state.SchemaVersion != Schema || state.Items is null ||
+        if (state is null ||
+            state.SchemaVersion is not (LegacySchema or ImportantSchema) ||
+            state.Items is null ||
             state.Items.Count > MaxItems ||
             state.Items.Any(item =>
                 !ValidKey(item.EventKey) ||
                 item.Lane is not (TelegramNotificationLane.FiveHourRecovery or
                     TelegramNotificationLane.WeeklyRecovery) ||
                 item.ObservedAt == default || item.CreatedAt == default ||
+                (item.FiveHourZeroImportant &&
+                 (state.SchemaVersion != ImportantSchema ||
+                  item.Lane != TelegramNotificationLane.FiveHourRecovery ||
+                  item.IsTest)) ||
                 !Enum.IsDefined(item.Status) ||
                 (item.Status == WindowsAmanoOutboxStatus.AwaitingApproval &&
                  (item.AttemptToken is not null || item.TelegramMessageId is not null)) ||
@@ -315,7 +372,10 @@ internal sealed record WindowsAmanoOutboxItem(
     WindowsAmanoOutboxStatus Status,
     string? AttemptToken,
     long? TelegramMessageId,
-    bool IsTest = false);
+    bool IsTest = false,
+    // Missing for pre-STEP3-A ledger records, safely defaults to false.
+    // The existing production delivery coordinators MUST reject true.
+    bool FiveHourZeroImportant = false);
 
 internal sealed class WindowsAmanoOutboxState
 {
@@ -331,9 +391,14 @@ public sealed record WindowsTelegramApprovalRow(
     TelegramNotificationLane Lane,
     string EventKey,
     DateTimeOffset ObservedAt,
-    bool IsTest = false)
+    bool IsTest = false,
+    bool FiveHourZeroImportant = false)
 {
-    public string LaneLabel => IsTest
+    // This label is only a review projection. The backing durable
+    // outbox record carries the immutable important-destination flag.
+    public string LaneLabel => FiveHourZeroImportant
+        ? "5H · 직전 잔여 0% 중요 알림(얼럿 봇) · 송신 차단"
+        : IsTest
         ? Lane == TelegramNotificationLane.FiveHourRecovery
             ? "5H · 모니터 봇 연결 테스트(묵음)" : "7D · 얼럿 봇 연결 테스트"
         : Lane == TelegramNotificationLane.FiveHourRecovery

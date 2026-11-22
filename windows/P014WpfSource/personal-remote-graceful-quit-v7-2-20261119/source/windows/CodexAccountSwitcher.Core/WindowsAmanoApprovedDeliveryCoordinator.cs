@@ -97,6 +97,9 @@ internal sealed class WindowsAmanoApprovedDeliveryCoordinator
             if (!outbox.Read().Any(item => item.Lane == lane &&
                 item.EventKey == route.EventKey &&
                 item.IsTest == route.IsTest &&
+                // Important 5H records never use the older Monitor or 7D
+                // Alert sender. No remote reservation and no actual send.
+                !item.FiveHourZeroImportant &&
                 item.Status == WindowsAmanoOutboxStatus.AwaitingApproval))
                 return new(WindowsAmanoApprovalStatus.NotPending);
 

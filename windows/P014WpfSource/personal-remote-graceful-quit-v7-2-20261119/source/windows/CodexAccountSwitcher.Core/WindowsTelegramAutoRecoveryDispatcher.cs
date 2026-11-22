@@ -59,6 +59,7 @@ internal sealed class WindowsTelegramAutoRecoveryDispatcher
             if (!outbox.Read().Any(item =>
                 item.Lane == lane && item.EventKey == eventKey &&
                 item.ObservedAt == observedAt && !item.IsTest &&
+                !item.FiveHourZeroImportant &&
                 item.Status == WindowsAmanoOutboxStatus.AwaitingApproval))
                 return new(WindowsAmanoApprovalStatus.NotPending);
 

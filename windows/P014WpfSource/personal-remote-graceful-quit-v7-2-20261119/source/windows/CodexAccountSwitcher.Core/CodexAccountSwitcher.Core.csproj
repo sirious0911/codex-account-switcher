@@ -8,6 +8,7 @@
     <InternalsVisibleTo Include="CodexAccountSwitcher.Checks" />
     <InternalsVisibleTo Include="CodexAccountSwitcher.UiChecks" />
     <InternalsVisibleTo Include="Codex-Account-Switcher-windows-x64" />
+    <InternalsVisibleTo Include="IntegratedChecks" />
     <ProjectReference Include="../../monitor/dotnet-core/CodexUsageMonitor.Core.csproj" />
   </ItemGroup>
 </Project>

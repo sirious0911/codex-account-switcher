@@ -643,15 +643,43 @@ public partial class App : Application
                 var events = fiveHour100Worker?.Process(sample, client.State,
                     externalMonitorGate, DateTimeOffset.UtcNow) ?? [];
                 foreach (var detected in events)
-                    PrepareExistingAmanoRoute(
-                        TelegramNotificationLane.FiveHourRecovery,
-                        detected.Key, detected.ObservedAt);
+                {
+                    // A confirmed 5H ZERO is routed to one durable outbox
+                    // record for the important Alert Bot, never to the
+                    // existing Monitor sender as a fallback.
+                    if (QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(
+                            detected) == QuotaTelegramBot.AlertImportant)
+                        StageFiveHourZeroImportantNoSend(detected);
+                    else
+                        PrepareExistingAmanoRoute(
+                            TelegramNotificationLane.FiveHourRecovery,
+                            detected.Key, detected.ObservedAt);
+                }
             }
         }
         catch (Exception ex) {
             System.Diagnostics.Trace.TraceWarning(
                 "Five-hour quota mock alert persistence failed: " + ex.GetType().Name);
         }
+    }
+
+    private void StageFiveHourZeroImportantNoSend(FiveHour100Alert alert)
+    {
+        // Fail closed: never let an important 5H event enter the ordinary
+        // Monitor sender or the auto-delivery coordinator. The dedicated
+        // important sender has no production dispatch authorization.
+        var preferences = nativeSettings?.TelegramPreferences;
+        if (preferences?.Normalize().WantsFiveHour != true)
+            return;
+        var route = WindowsExistingAmanoBotRoute.PrepareFiveHourZero(
+            bundledTelegramHostPath, nativeSettings?.TelegramBotDirectory,
+            alert);
+        var staged = route is not null &&
+            telegramOutbox?.StageFiveHourZeroImportant(
+                alert, route, preferences) == true;
+        existingAmanoBotRouteStatus = staged
+            ? "5H 0% → 기존 얼럿 봇 중요 알림 대기 · 실제 발송 차단"
+            : "5H 0% → 중요 알림 경로 검증 실패 또는 이미 접수됨 · 발송 차단";
     }
 
     private void PrepareExistingAmanoRoute(

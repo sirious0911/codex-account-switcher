@@ -437,6 +437,55 @@ await Test("5H zero Alert Bot has pinned no-send route and one durable event key
             prepared.ReviewedCodexScriptPath == script &&
             prepared.EventKey == zero.Key &&
             prepared.Message == important!.Text);
+        // The REAL production outbox is exercised only inside synthetic
+        // OS temp, with fake bot metadata and NO delivery coordinator.
+        // Important 5H stays permanently unreservable by old send paths.
+        var approvedForStaging = new TelegramNotificationPreferences(
+            DeviceRole: TelegramNotificationDeviceRole.Sender,
+            NotificationsRequested: true,
+            FiveHourRequested: true,
+            WeeklyRequested: true);
+        var off = approvedForStaging with { NotificationsRequested = false };
+        var outbox = new WindowsAmanoProductionOutbox(synthetic);
+        Ensure(!outbox.StageFiveHourZeroImportant(zero, prepared, off));
+        Ensure(outbox.Read().Count == 0);
+        // Start with a real-schema legacy v1 ordinary 7D row. The new
+        // version reads it, and upgrades atomically only for the 5H urgent.
+        var anotherKey = new string('e', 64);
+        Ensure(outbox.Stage(TelegramNotificationLane.WeeklyRecovery,
+            anotherKey, zero.ObservedAt, true, approvedForStaging));
+        var ledgerPath = Path.Combine(synthetic,
+            "telegram-production-outbox", "state.json");
+        using (var v1 = JsonDocument.Parse(File.ReadAllText(ledgerPath)))
+            Ensure(v1.RootElement.GetProperty("SchemaVersion").GetInt32() == 1);
+        Ensure(outbox.StageFiveHourZeroImportant(zero, prepared, approvedForStaging));
+        using (var v2 = JsonDocument.Parse(File.ReadAllText(ledgerPath)))
+            Ensure(v2.RootElement.GetProperty("SchemaVersion").GetInt32() == 2);
+        var pending = outbox.Read().Single(x => x.FiveHourZeroImportant);
+        Ensure(pending.Lane == TelegramNotificationLane.FiveHourRecovery &&
+            pending.EventKey == zero.Key && pending.FiveHourZeroImportant &&
+            !pending.IsTest &&
+            pending.Status == WindowsAmanoOutboxStatus.AwaitingApproval);
+        Ensure(outbox.ReadPendingRows().Single(x => x.FiveHourZeroImportant)
+            .LaneLabel.Contains("송신 차단"));
+        Ensure(!outbox.StageFiveHourZeroImportant(
+            zero, prepared, approvedForStaging));
+        // No second outbox item may be staged under the ordinary 5H lane.
+        Ensure(!outbox.Stage(TelegramNotificationLane.FiveHourRecovery,
+            zero.Key, zero.ObservedAt, true, approvedForStaging));
+        Ensure(outbox.ReserveOnce(TelegramNotificationLane.FiveHourRecovery,
+            zero.Key, userApprovedThisExactEvent: true,
+            verifiedLocalSender: true,
+            crossHostSenderHandoffConfirmed: true) is null);
+        Ensure(outbox.Read().Single(x => x.FiveHourZeroImportant).Status ==
+            WindowsAmanoOutboxStatus.AwaitingApproval);
+        // Existing 7D and ordinary 5H entries stay separate and preserve
+        // their original (non-important) classification.
+        var otherKey = new string('f', 64);
+        Ensure(outbox.Stage(TelegramNotificationLane.FiveHourRecovery,
+            otherKey, zero.ObservedAt, true, approvedForStaging));
+        Ensure(outbox.Read().Count == 3 &&
+            outbox.Read().Count(x => x.FiveHourZeroImportant) == 1);
         // One shared 5H event key is claimed once regardless of which bot
         // preview is selected; no second claim after failure/uncertainty.
         var reserved = worker.ReserveMockDelivery(zero.Key, "MOCK_WINDOWS");

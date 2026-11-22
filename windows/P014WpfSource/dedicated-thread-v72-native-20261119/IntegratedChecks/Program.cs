@@ -12,7 +12,9 @@ using System.IO.Pipes;
 using System.Text;
 
 // Real native SwiftHost must use isolated fake Codex CLI and temp identities.
-if (args.Length == 1 && args[0] == "app-server")
+// Match the actual Swift JSONRPCSession launch argv ["app-server", "--stdio"].
+if (args.Length is 1 or 2 && args[0] == "app-server" &&
+    (args.Length == 1 || args[1] == "--stdio"))
     return await NativeSwiftHostRefreshSmoke.FakeCodexRpcAsync();
 if (args.Length == 2 && args[0] == "--native-swift-host-refresh-no-send")
     return await NativeSwiftHostRefreshSmoke.RunAsync(args[1]);

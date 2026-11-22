@@ -2,3 +2,11 @@
 # conversion would invalidate pinned JS bundle SHA256 verification.
 # Binary resources are also preserved unchanged.
 * -text
+# These frozen, byte-pinned snapshot sources intentionally include CRLF and
+# select pre-existing whitespace. Keep * -text; do not rewrite the source.
+* whitespace=cr-at-eol
+codex-auto-greeting-stage-20261120/authority/codex-chat-authority.mjs whitespace=cr-at-eol,-trailing-space
+dedicated-thread-v72-native-20261119/MainWindow.cs whitespace=cr-at-eol,-blank-at-eof
+personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher.Core/QuotaTelegramBotRouting.cs whitespace=cr-at-eol,-blank-at-eof
+personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher.Core/TelegramWeekly100Sender.cs whitespace=cr-at-eol,-blank-at-eof
+personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/MainWindow.cs whitespace=cr-at-eol,-blank-at-eof

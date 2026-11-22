@@ -17,18 +17,88 @@ internal sealed class CodexWorkActivityDetector
     internal static readonly TimeSpan RecentActivityWindow = TimeSpan.FromMinutes(3);
 
     private readonly string codexHome;
+    private readonly Func<bool> foregroundCheck;
+    private static readonly TimeSpan ArchiveMetadataScanInterval =
+        TimeSpan.FromSeconds(10);
+    private DateTimeOffset lastArchiveScanAt = DateTimeOffset.MinValue;
+    private DateTime? lastArchiveWriteUtc;
 
-    internal CodexWorkActivityDetector(string? codexHome = null)
+    internal CodexWorkActivityDetector(
+        string? codexHome = null, Func<bool>? foregroundCheck = null)
     {
         this.codexHome = codexHome ??
             Environment.GetEnvironmentVariable("CODEX_HOME") ??
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".codex");
+        this.foregroundCheck = foregroundCheck ?? IsCodexDesktopForeground;
     }
 
     internal bool HasRecentWork(DateTimeOffset now)
     {
-        if (IsCodexDesktopForeground()) return true;
-        return HasRecentSessionFileMetadata(codexHome, now);
+        if (foregroundCheck()) return true;
+        if (HasRecentSessionFileMetadata(codexHome, now)) return true;
+        // Codex can continue writing a session CREATED weeks/months ago.
+        // The existing recent-day bucket scan then misses legitimate work.
+        // Check *metadata only* of archived sessions, at most once per 10s.
+        return HasRecentArchivedWork(now);
+    }
+
+    private bool HasRecentArchivedWork(DateTimeOffset now)
+    {
+        if (lastArchiveScanAt == DateTimeOffset.MinValue ||
+            now < lastArchiveScanAt ||
+            now - lastArchiveScanAt >= ArchiveMetadataScanInterval)
+        {
+            lastArchiveScanAt = now;
+            lastArchiveWriteUtc = LatestArchivedRolloutWriteUtc(codexHome, now);
+        }
+        return lastArchiveWriteUtc is DateTime stamp &&
+            IsRecentWrite(stamp, now);
+    }
+
+    internal static bool HasRecentArchivedSessionFileMetadata(
+        string codexHome, DateTimeOffset now) =>
+        LatestArchivedRolloutWriteUtc(codexHome, now) is DateTime stamp &&
+        IsRecentWrite(stamp, now);
+
+    private static bool IsRecentWrite(DateTime stamp, DateTimeOffset now)
+    {
+        var age = now.UtcDateTime - stamp;
+        return age >= TimeSpan.FromSeconds(-30) && age <= RecentActivityWindow;
+    }
+
+    private static DateTime? LatestArchivedRolloutWriteUtc(
+        string codexHome, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(codexHome)) return null;
+        var root = Path.Combine(codexHome, "sessions");
+        if (!Directory.Exists(root)) return null;
+        DateTime? latest = null;
+        try
+        {
+            // Do not follow reparse points or read any session content.
+            // Enumerate metadata once/10s only after recent-day scan misses.
+            var options = new EnumerationOptions {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint
+            };
+            foreach (var path in Directory.EnumerateFiles(
+                root, "rollout-*.jsonl", options))
+            {
+                DateTime stamp;
+                try { stamp = File.GetLastWriteTimeUtc(path); }
+                catch (Exception error) when (error is IOException or
+                    UnauthorizedAccessException) { continue; }
+                if (latest is null || stamp > latest.Value) latest = stamp;
+                if (IsRecentWrite(stamp, now)) return stamp;
+            }
+        }
+        catch (Exception error) when (error is IOException or
+            UnauthorizedAccessException)
+        {
+            // Never use missing/inaccessible metadata as proof of work.
+        }
+        return latest;
     }
 
     internal static bool HasRecentSessionFileMetadata(string codexHome, DateTimeOffset now)

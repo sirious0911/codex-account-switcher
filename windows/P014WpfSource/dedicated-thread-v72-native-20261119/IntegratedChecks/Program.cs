@@ -22,6 +22,36 @@ if (args.Length == 3 && args[0] == "--native-swift-host-clock-no-send" &&
     args[2] is "active" or "reset")
     return await NativeSwiftHostRefreshSmoke.RunWallClockAsync(args[1], args[2]);
 
+// Exercise the product's INTERNAL activity detector without changing
+// its accessibility or granting the test harness product permissions.
+static Type ActivityDetectorType() =>
+    typeof(App).Assembly.GetType(
+        "CodexAccountSwitcher.CodexWorkActivityDetector", throwOnError: true)!;
+static object ActivityDetector(string? home, Func<bool>? foreground)
+{
+    var type = ActivityDetectorType();
+    return type.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic)
+        .Single().Invoke([home, foreground]);
+}
+static bool ActivityDetected(object detector, DateTimeOffset at) =>
+    (bool)ActivityDetectorType().GetMethod("HasRecentWork",
+        BindingFlags.Instance | BindingFlags.NonPublic)!
+        .Invoke(detector, [at])!;
+static bool SessionMetadataCheck(string method, string root, DateTimeOffset at) =>
+    (bool)ActivityDetectorType().GetMethod(method,
+        BindingFlags.Static | BindingFlags.NonPublic)!
+        .Invoke(null, [root, at])!;
+
+if (args.Length == 1 && args[0] == "--read-only-activity-probe")
+{
+    // Only metadata and foreground process identity, never session content.
+    var detector = ActivityDetector(null, () => false);
+    var found = ActivityDetected(detector, DateTimeOffset.UtcNow);
+    Console.WriteLine(found ? "CODEX_ACTIVITY_READONLY_DETECTED"
+                            : "CODEX_ACTIVITY_READONLY_NOT_DETECTED");
+    return found ? 0 : 16;
+}
+
 int passed = 0, failed = 0;
 async Task Test(string title, Func<Task> action)
 {
@@ -46,6 +76,52 @@ AccountSnapshot Snapshot(Guid? activeId, bool confirmed = true,
     return new AccountSnapshot(rows.ToArray(), activeId, new Preferences(),
         mutating, adding, confirmed, null, new Dictionary<string,string>());
 }
+await Test("Archived Codex session older than 3 days is still active by file mtime", () => {
+    var root = Path.Combine(Path.GetTempPath(),
+        "p014-archived-session-" + Guid.NewGuid().ToString("N"));
+    var now = DateTimeOffset.UtcNow;
+    var created = now.AddDays(-78);
+    var dir = Path.Combine(root, "sessions",
+        created.Year.ToString("0000"),
+        created.Month.ToString("00"),
+        created.Day.ToString("00"));
+    try {
+        Directory.CreateDirectory(dir);
+        var f = Path.Combine(dir, "rollout-synthetic.jsonl");
+        File.WriteAllText(f, string.Empty); // synthetic metadata fixture only
+        File.SetLastWriteTimeUtc(f, now.UtcDateTime.AddSeconds(-4));
+        var activity = ActivityDetector(root, () => false);
+        Ensure(!SessionMetadataCheck("HasRecentSessionFileMetadata", root, now));
+        Ensure(ActivityDetected(activity, now));
+        Ensure(SessionMetadataCheck("HasRecentArchivedSessionFileMetadata", root, now));
+        Ensure(!ActivityDetected(activity, now.AddMinutes(4)));
+    }
+    finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    return Task.CompletedTask;
+});
+await Test("Archived file changes are detected on bounded 10s metadata scan", () => {
+    var root = Path.Combine(Path.GetTempPath(),
+        "p014-archived-resume-" + Guid.NewGuid().ToString("N"));
+    var now = DateTimeOffset.UtcNow;
+    var archive = now.AddDays(-100);
+    var dir = Path.Combine(root, "sessions",
+        archive.Year.ToString("0000"),
+        archive.Month.ToString("00"),
+        archive.Day.ToString("00"));
+    try {
+        Directory.CreateDirectory(dir);
+        var f = Path.Combine(dir, "rollout-synthetic.jsonl");
+        File.WriteAllText(f, string.Empty);
+        File.SetLastWriteTimeUtc(f, now.UtcDateTime.AddMinutes(-8));
+        var activity = ActivityDetector(root, () => false);
+        Ensure(!ActivityDetected(activity, now));
+        File.SetLastWriteTimeUtc(f, now.UtcDateTime.AddSeconds(1));
+        Ensure(!ActivityDetected(activity, now.AddSeconds(5)));
+        Ensure(ActivityDetected(activity, now.AddSeconds(11)));
+    }
+    finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    return Task.CompletedTask;
+});
 await Test("P015 native protected-input status never enables Owner", () => {
     // Production admission stays internal. Inspect it without granting
     // the integrated test assembly any new permission to send or start.

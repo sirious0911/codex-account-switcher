@@ -140,11 +140,37 @@ jobs:
       - name: P0-20 Verify fresh SwiftHost and build isolated unsigned P0-18 preview
         shell: pwsh
         run: |
-          $preview = Join-Path $env:RUNNER_TEMP ('p020-unsigned-' + [Guid]::NewGuid().ToString('N'))
+          # Different from windows/artifacts/Codex-Account-Switcher-windows-x64.exe,
+          # which is the baseline product. This is the P014 WPF feature candidate.
+          $preview = Join-Path $env:RUNNER_TEMP 'p014-step2-unsigned-preview'
           ./scripts/p020-source-bound-preview.ps1 -SourceRoot ((Get-Location).Path) -ExpectedCommit $env:GITHUB_SHA -OutputDirectory $preview
           if ($LASTEXITCODE -ne 0) { throw 'P0-20 unsigned candidate gate failed.' }
-          # Only the synthetic 83-case WPF suite is executed; the unsigned
-          # candidate EXE is never started or uploaded as a release.
+          $previewExe = Join-Path $preview 'Codex-Account-Switcher-windows-x64.exe'
+          # Exact one-argument WPF test mode has no core, account switch,
+          # persistent settings or Sender. Reject a default app mispackaged
+          # under the same EXE filename by requiring prompt exit code 0.
+          $info = [Diagnostics.ProcessStartInfo]::new($previewExe, '--step2-settings-no-send')
+          $info.UseShellExecute = $false
+          $info.CreateNoWindow = $true
+          $info.WindowStyle = [Diagnostics.ProcessWindowStyle]::Hidden
+          $process = [Diagnostics.Process]::Start($info)
+          if ($null -eq $process) { throw 'P014 preview could not launch.' }
+          try {
+            if (-not $process.WaitForExit(20000)) {
+              $process.Kill($true)
+              throw 'HOLD_P014_READONLY_PREVIEW_DID_NOT_EXIT'
+            }
+            if ($process.ExitCode -ne 0) {
+              throw 'HOLD_P014_READONLY_PREVIEW_EXIT_NONZERO'
+            }
+          } finally { $process.Dispose() }
+          $sha = (Get-FileHash -LiteralPath $previewExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText(
+            (Join-Path $env:RUNNER_TEMP 'P014-Step2-Unsigned-Preview.sha256'),
+            "$sha  Codex-Account-Switcher-windows-x64.exe" + [Environment]::NewLine,
+            [Text.UTF8Encoding]::new($false))
+          # Synthetic WPF integration remains required. This unsigned
+          # executable is a non-release review candidate, never installed.
           Push-Location windows/P014WpfSource/dedicated-thread-v72-native-20261119
           try {
             dotnet run --project IntegratedChecks/IntegratedChecks.csproj -c Release
@@ -168,6 +194,15 @@ jobs:
             windows/artifacts/SwiftRuntime.zip
             windows/artifacts/SwiftRuntime.zip.sha256
             windows/artifacts/SwiftHost-source-commit.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload P014 Windows STEP2 unsigned no-send candidate (not a release)
+        uses: actions/upload-artifact@v4
+        with:
+          name: P014-Windows-STEP2-NO-SEND-UNSIGNED-TEST-ONLY
+          path: |
+            ${{ runner.temp }}/p014-step2-unsigned-preview/Codex-Account-Switcher-windows-x64.exe
+            ${{ runner.temp }}/P014-Step2-Unsigned-Preview.sha256
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows build

@@ -24,6 +24,19 @@ internal static class NativeSwiftHostRefreshSmoke
                 continue;
             string? method = request.TryGetProperty("method", out var m)
                 ? m.GetString() : null;
+            // Counts only fixed method names, never auth, IDs or payloads.
+            var traceFile = Environment.GetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_TRACE_FILE");
+            if (!string.IsNullOrEmpty(traceFile) &&
+                Path.GetFileName(traceFile) == "rpc-methods.log" &&
+                Path.GetFullPath(traceFile).StartsWith(
+                    Path.GetFullPath(Path.GetTempPath()), StringComparison.OrdinalIgnoreCase))
+            {
+                try { File.AppendAllText(traceFile, method is
+                    ("initialize" or "account/read" or "account/rateLimits/read")
+                    ? method + "\n" : "denied\n"); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
             // Never silently acknowledge login, credit consumption,
             // token refresh, browser actions or other mutating RPC methods.
             if (method is not ("initialize" or "account/read" or
@@ -86,10 +99,12 @@ internal static class NativeSwiftHostRefreshSmoke
 
         var originalCli = Environment.GetEnvironmentVariable("CODEX_CLI_PATH");
         var originalFake = Environment.GetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_MODE");
+        var originalTrace = Environment.GetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_TRACE_FILE");
         var baseDir = Path.Combine(Path.GetTempPath(),
             "p014-swift-native-no-send-" + Guid.NewGuid().ToString("N"));
         var activeHome = Path.Combine(baseDir, "active");
         var dataHome = Path.Combine(baseDir, "data");
+        var traceFile = Path.Combine(baseDir, "rpc-methods.log");
         Directory.CreateDirectory(activeHome);
         const string auth = """{"tokens":{"account_id":"synthetic-fixture-account"}}""";
         var authFile = Path.Combine(activeHome, "auth.json");
@@ -103,6 +118,7 @@ internal static class NativeSwiftHostRefreshSmoke
             // account mutations, browser, Telegram or any live profile.
             Environment.SetEnvironmentVariable("CODEX_CLI_PATH", testExe);
             Environment.SetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_MODE", TestMode);
+            Environment.SetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_TRACE_FILE", traceFile);
             await using var client = new CoreClient(
                 Path.GetFullPath(swiftHostPath), dataHome, activeHome,
                 blockMutatingCommands: true);
@@ -161,14 +177,49 @@ internal static class NativeSwiftHostRefreshSmoke
         }
         catch (Exception ex)
         {
+            // Do not print Swift's raw exception text: it could include
+            // paths or local server diagnostics. Report only known categories.
+            var detail = ex.Message;
+            var category = detail switch
+            {
+                var m when m.Contains("Codex executable could not be found.", StringComparison.OrdinalIgnoreCase)
+                    => "FAKE_CLI_NOT_FOUND",
+                var m when m.Contains("Codex app-server failed to start", StringComparison.OrdinalIgnoreCase)
+                    => "FAKE_CLI_LAUNCH",
+                var m when m.Contains("No weekly Codex Usage window", StringComparison.OrdinalIgnoreCase)
+                    => "FAKE_WEEKLY_WINDOW_UNAVAILABLE",
+                var m when m.Contains("malformed JSON", StringComparison.OrdinalIgnoreCase)
+                    => "FAKE_RPC_MALFORMED",
+                var m when m.Contains("app-server closed the connection", StringComparison.OrdinalIgnoreCase)
+                    => "FAKE_RPC_CLOSED",
+                var m when m.Contains("app-server did not respond", StringComparison.OrdinalIgnoreCase)
+                    => "FAKE_RPC_TIMEOUT",
+                var m when m.Contains("Unknown host command", StringComparison.OrdinalIgnoreCase)
+                    => "OLD_HOST_NO_REFRESH_COMMAND",
+                var m when m.Contains("Synthetic no-send RPC denied", StringComparison.OrdinalIgnoreCase)
+                    => "DISALLOWED_RPC_METHOD",
+                var m when m.Contains("account identity", StringComparison.OrdinalIgnoreCase)
+                    => "ACTIVE_IDENTITY_UNVERIFIED",
+                _ => "UNCLASSIFIED"
+            };
             Console.Error.WriteLine("HOLD_NATIVE_SWIFTHOST_ACCEPTANCE_" +
-                stage + "_" + ex.GetType().Name);
+                stage + "_" + ex.GetType().Name + "_" + category);
+            if (File.Exists(traceFile))
+            {
+                var methods = File.ReadAllLines(traceFile);
+                foreach (var method in new[] { "initialize", "account/read", "account/rateLimits/read", "denied" })
+                    Console.Error.WriteLine("SYNTHETIC_RPC_" +
+                        method.Replace('/', '_').ToUpperInvariant() + "_COUNT=" +
+                        methods.Count(m => m == method));
+            }
+            else Console.Error.WriteLine("SYNTHETIC_RPC_TRACE_ABSENT");
             return 92;
         }
         finally
         {
             Environment.SetEnvironmentVariable("CODEX_CLI_PATH", originalCli);
             Environment.SetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_MODE", originalFake);
+            Environment.SetEnvironmentVariable("CODEX_SWITCHER_FAKE_RPC_TRACE_FILE", originalTrace);
             try { Directory.Delete(baseDir, recursive: true); }
             catch (IOException) { /* Fixture cleanup only; never touch user data. */ }
             catch (UnauthorizedAccessException) { }

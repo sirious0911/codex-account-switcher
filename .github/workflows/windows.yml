@@ -87,6 +87,17 @@ jobs:
           swift test
       - name: Build the shared core host
         run: swift build -c release --product SwitcherHost
+      - name: Verify fresh native active-quota IPC early (synthetic, no send)
+        shell: pwsh
+        run: |
+          $nativeBin = swift build -c release --show-bin-path
+          if ($LASTEXITCODE -ne 0) { throw 'HOLD_SWIFTHOST_BIN_PATH' }
+          $nativeHost = Join-Path $nativeBin.Trim() 'SwitcherHost.exe'
+          if (-not (Test-Path -LiteralPath $nativeHost -PathType Leaf)) {
+            throw 'HOLD_SWIFTHOST_MISSING'
+          }
+          dotnet run --project windows/P014WpfSource/dedicated-thread-v72-native-20261119/IntegratedChecks/IntegratedChecks.csproj -c Release -- --native-swift-host-refresh-no-send $nativeHost
+          if ($LASTEXITCODE -ne 0) { throw 'HOLD_NATIVE_ACTIVE_QUOTA_IPC_EARLY' }
       - name: Check native transport and shared storage with isolated credentials
         shell: pwsh
         run: |

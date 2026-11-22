@@ -92,6 +92,12 @@ public partial class App : Application
     private bool exiting;
     private bool step2ReadOnlyPreview;
     private bool basicViewerNoSend; // Full GUI, explicit disabled-sender trial.
+    private DispatcherTimer? basicViewerTrialTimer;
+    private DateTimeOffset basicViewerTrialStarted;
+    private bool basicViewerWindowObserved;
+    private bool basicViewerTaskbarAttached;
+    private int basicViewerFreshSampleCount;
+    private long basicViewerLastSampleMs;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -403,6 +409,28 @@ public partial class App : Application
             if (!basicViewerNoSend)
                 resetPreviewTimer.Start();
             if (!e.Args.Contains("--background")) window.OpenWindow();
+            if (basicViewerNoSend)
+            {
+                basicViewerTrialStarted = DateTimeOffset.UtcNow;
+                basicViewerTrialTimer = new DispatcherTimer {
+                    Interval = TimeSpan.FromSeconds(3)
+                };
+                basicViewerTrialTimer.Tick += async (_, _) =>
+                {
+                    basicViewerWindowObserved |= window?.IsVisible == true;
+                    basicViewerTaskbarAttached |=
+                        taskbarPanel?.IsVisibleOnTaskbar == true;
+                    if (DateTimeOffset.UtcNow - basicViewerTrialStarted <
+                        TimeSpan.FromSeconds(95)) return;
+                    // Never interrupt a UI mutation even though viewer
+                    // mode should deny all mutation commands.
+                    if (window?.IsBusy == true) return;
+                    basicViewerTrialTimer?.Stop();
+                    WriteBasicViewerTrialReport();
+                    await QuitAsync();
+                };
+                basicViewerTrialTimer.Start();
+            }
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
             if (!basicViewerNoSend)
@@ -413,6 +441,46 @@ public partial class App : Application
         } catch (Exception ex) {
             MessageBox.Show(ex.Message, "Codex Account Switcher Personal", MessageBoxButton.OK, MessageBoxImage.Error);
             await QuitAsync();
+        }
+    }
+
+    // Bounded session-only evidence: the report never includes user IDs,
+    // token paths, raw quota payloads, chat IDs, or persistent settings.
+    private void WriteBasicViewerTrialReport()
+    {
+        var selected = Environment.GetEnvironmentVariable(
+            "CODEX_SWITCHER_STEP2_GUI_REPORT_FILE");
+        if (!basicViewerNoSend || string.IsNullOrWhiteSpace(selected)) return;
+        try
+        {
+            var path = Path.GetFullPath(selected);
+            var dir = Path.GetFullPath(Path.GetTempPath()).TrimEnd(
+                Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (!string.Equals(Path.GetDirectoryName(path), dir,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(Path.GetExtension(path), ".json",
+                    StringComparison.OrdinalIgnoreCase))
+                return;
+            using var output = new FileStream(path, FileMode.CreateNew,
+                FileAccess.Write, FileShare.None);
+            System.Text.Json.JsonSerializer.Serialize(output, new
+            {
+                mode = "STEP2_BASIC_VIEWER_NO_SEND",
+                result = "SESSION_COMPLETED",
+                windowVisible = basicViewerWindowObserved,
+                taskbarAttached = basicViewerTaskbarAttached,
+                activeIdentityConfirmed = client?.State.ActiveIdentityConfirmed == true,
+                freshActiveSamples = basicViewerFreshSampleCount,
+                sessionDurationSeconds = Math.Round(
+                    (DateTimeOffset.UtcNow - basicViewerTrialStarted).TotalSeconds)
+            });
+        }
+        catch (Exception error) when (error is IOException or
+            UnauthorizedAccessException or ArgumentException or
+            System.Security.SecurityException)
+        {
+            System.Diagnostics.Trace.TraceWarning(
+                "Basic viewer test receipt unavailable: " + error.GetType().Name);
         }
     }
 
@@ -535,7 +603,17 @@ public partial class App : Application
             {
                 if (exiting || !externalMonitorGate.Allows(sample)) return;
                 if (sample.ProfileID is Guid id)
+                {
                     adaptiveUsage?.ObserveFreshActiveSample(id, sample);
+                    var lag = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() -
+                        sample.ObservedAtMilliseconds;
+                    if (lag >= -30000 && lag <= 360000 &&
+                        sample.ObservedAtMilliseconds > basicViewerLastSampleMs)
+                    {
+                        basicViewerLastSampleMs = sample.ObservedAtMilliseconds;
+                        basicViewerFreshSampleCount++;
+                    }
+                }
                 taskbarPanel?.Accept(sample);
             }
             if (Dispatcher.CheckAccess()) AcceptActive();
@@ -1301,6 +1379,7 @@ public partial class App : Application
             return;
         }
         exiting = true;
+        basicViewerTrialTimer?.Stop();
         activeProofChannel?.Dispose();
         autoTelegramSession.Disarm();
         resetPreviewTimer.Stop();
@@ -1382,6 +1461,7 @@ public partial class App : Application
     }
     protected override void OnExit(ExitEventArgs e) {
         if (step2ReadOnlyPreview) { base.OnExit(e); return; }
+        basicViewerTrialTimer?.Stop();
         codexDueDispatcher?.Disable();
         codexOwnerAutoStart?.Dispose();
         remoteQuitChannel?.Dispose();

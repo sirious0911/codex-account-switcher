@@ -15,7 +15,33 @@ if ($LASTEXITCODE -ne 0 -or $ExpectedCommit -cne $head) {
 # built from uncommitted edits to another build input. CI's normal bin/obj
 # and Windows artifacts remain covered by the repository's .gitignore.
 $dirty = @(& git -C $root status --porcelain --untracked-files=all)
-if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+if ($LASTEXITCODE -ne 0) { throw 'HOLD_P020_GIT_STATUS_UNAVAILABLE' }
+# Windows SwiftPM may remove the macOS-only Sparkle Package.resolved
+# after tests; the existing package-windows.ps1 already documents that
+# behavior. Recover ONLY an exact, sole tracked deletion from the
+# committed index. Never accept a modified lockfile or any other dirty
+# source, and never run this repair outside hosted CI.
+if ($env:GITHUB_ACTIONS -ceq 'true' -and
+    $dirty.Count -eq 1 -and $dirty[0] -ceq ' D Package.resolved') {
+    $headLockBlob = (& git -C $root rev-parse 'HEAD:Package.resolved').Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'HOLD_P020_LOCKFILE_HEAD_MISSING' }
+    $indexLockBlob = (& git -C $root rev-parse ':Package.resolved').Trim()
+    if ($LASTEXITCODE -ne 0 -or $headLockBlob -cne $indexLockBlob) {
+        throw 'HOLD_P020_LOCKFILE_INDEX_MISMATCH'
+    }
+    $lockPath = Join-Path $root 'Package.resolved'
+    if (Test-Path -LiteralPath $lockPath) {
+        throw 'HOLD_P020_LOCKFILE_NOT_ACTUALLY_MISSING'
+    }
+    & git -C $root checkout-index --force -- Package.resolved
+    if ($LASTEXITCODE -ne 0) { throw 'HOLD_P020_LOCKFILE_RESTORE_FAILED' }
+    $dirty = @(& git -C $root status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+        throw 'HOLD_P020_LOCKFILE_RESTORE_NOT_CLEAN'
+    }
+    Write-Output "P020_EXACT_LOCKFILE_RESTORED_FROM_HEAD=$headLockBlob"
+}
+if ($dirty.Count -ne 0) {
     # CI runs several build/test steps before this provenance gate. Print
     # only the Git status codes and relative file names (never file
     # contents or environment secrets) to identify generated artifacts

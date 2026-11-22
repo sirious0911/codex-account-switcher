@@ -51,6 +51,21 @@ internal static class Step2ReadOnlyPreview
             Width = 510, Height = 245, ShowInTaskbar = false, ShowActivated = false };
     }
 
+    // Visible only in an explicitly selected, one-shot read-only test mode.
+    internal static Window CreateLive(Step2LiveQuotaReadOnly.Snapshot snapshot)
+    {
+        var panel = new StackPanel { Margin = new Thickness(20) };
+        panel.Children.Add(new TextBlock { Text = "Windows 활성 계정 · 실시간 사용량 검증", FontSize = 20 });
+        panel.Children.Add(new TextBlock { Text =
+            $"5시간 잔여 {snapshot.FiveHourRemainingPercent:0.#}% · 초기화 {snapshot.FiveHourReset.ToLocalTime():yyyy-MM-dd HH:mm zzz}" });
+        panel.Children.Add(new TextBlock { Text =
+            $"7일 잔여 {snapshot.WeeklyRemainingPercent:0.#}% · 초기화 {snapshot.WeeklyReset.ToLocalTime():yyyy-MM-dd HH:mm zzz}" });
+        panel.Children.Add(new TextBlock { Text = "비송신 · 계정전환 없음 · 운영 설정 변경 없음" });
+        return new Window { Title = "Codex Switcher · 활성 계정 실시간 조회",
+            Content = panel, Width = 550, Height = 215,
+            ShowInTaskbar = false, ShowActivated = false };
+    }
+
     internal static MainWindow CreateSettings()
     {
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),

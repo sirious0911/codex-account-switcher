@@ -20,6 +20,7 @@
       Exclude="../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/MainWindow.cs;../personal-remote-graceful-quit-v7-2-20261119/source/windows/CodexAccountSwitcher/App.xaml.cs" />
     <Compile Include="MainWindow.cs" />
     <Compile Include="Step2ReadOnlyPreview.cs" />
+    <Compile Include="Step2LiveQuotaReadOnly.cs" />
     <Compile Include="App.xaml.cs" />
     <Compile Include="SwitcherActiveProfileReadOnlyChannel.cs" />
     <Compile Include="DedicatedResetDeadlineObserver.cs" />

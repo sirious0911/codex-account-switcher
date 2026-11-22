@@ -96,6 +96,34 @@ public partial class App : Application
     {
         base.OnStartup(e);
         if (!startRuntime) return;
+        // STEP 2 one-shot actual quota probe for the EXACT active account.
+        // This runs BEFORE any normal startup and cannot create Owner,
+        // Telegram sender, CoreClient, account switch or Codex turn.
+        if (e.Args.Contains("--step2-live-quota-no-send", StringComparer.Ordinal))
+        {
+            step2ReadOnlyPreview = true;
+            if (e.Args.Length != 1) { Shutdown(2); return; }
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            try
+            {
+                var sample = await Step2LiveQuotaReadOnly.ReadOnceAsync();
+                Step2LiveQuotaReadOnly.WriteOptionalReport(sample);
+                var preview = Step2ReadOnlyPreview.CreateLive(sample);
+                MainWindow = preview;
+                preview.Show();
+                await Dispatcher.InvokeAsync(() => preview.UpdateLayout(), DispatcherPriority.Render);
+                var rendered = preview.IsVisible && preview.ActualWidth >= 400;
+                preview.Close();
+                Shutdown(rendered ? 0 : 2);
+            }
+            catch (Exception)
+            {
+                // Never expose provider payloads, auth values or message
+                // contents through the UI or OS process stdout.
+                Shutdown(2);
+            }
+            return;
+        }
         if (e.Args.Contains("--step2-taskbar-no-send", StringComparer.Ordinal))
         {
             step2ReadOnlyPreview = true;

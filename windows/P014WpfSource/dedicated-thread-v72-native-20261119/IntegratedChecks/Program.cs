@@ -164,6 +164,28 @@ await Test("Isolated MainWindow Settings renders dedicated-thread picker", () =>
                 dedicatedExistingThreadDataHome: Path.Combine(
                     Path.GetTempPath(), "synthetic-switcher-personal"));
             window.Navigate("settings");
+            // STEP 2: physically render the existing settings UI under one
+            // synthetic WPF App(false) without CoreClient startup, Telegram
+            // session, taskbar registration or real account/profile writes.
+            window.ShowInTaskbar = false;
+            window.ShowActivated = false;
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = -9000;
+            window.Top = -9000;
+            window.Show();
+            window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+            window.UpdateLayout();
+            Ensure(window.IsVisible && window.ActualWidth >= 400 &&
+                window.ActualHeight >= 250);
+            var width = (int)Math.Ceiling(window.ActualWidth);
+            var height = (int)Math.Ceiling(window.ActualHeight);
+            var rendered = new System.Windows.Media.Imaging.RenderTargetBitmap(
+                width, height, 96, 96, System.Windows.Media.PixelFormats.Pbgra32);
+            rendered.Render(window);
+            var pixels = new byte[width * height * 4];
+            rendered.CopyPixels(pixels, width * 4, 0);
+            Ensure(pixels.Where((value, i) => (i & 3) == 3)
+                .Any(value => value != 0));
             static bool FindPanel(DependencyObject element)
             {
                 if (element is DedicatedThreadPickerPanel) return true;

@@ -16,6 +16,14 @@ if ($LASTEXITCODE -ne 0 -or $ExpectedCommit -cne $head) {
 # and Windows artifacts remain covered by the repository's .gitignore.
 $dirty = @(& git -C $root status --porcelain --untracked-files=all)
 if ($LASTEXITCODE -ne 0 -or $dirty.Count -ne 0) {
+    # CI runs several build/test steps before this provenance gate. Print
+    # only the Git status codes and relative file names (never file
+    # contents or environment secrets) to identify generated artifacts
+    # without weakening the fail-closed source check.
+    Write-Output "P020_DIRTY_ENTRY_COUNT=$($dirty.Count)"
+    foreach ($line in @($dirty | Select-Object -First 20)) {
+        Write-Output "P020_DIRTY_ENTRY=$line"
+    }
     throw 'HOLD_P020_SOURCE_NOT_COMMITTED'
 }
 $artifacts = Join-Path $root 'windows/artifacts'

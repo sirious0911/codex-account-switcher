@@ -257,7 +257,9 @@ private actor JSONRPCSession {
     public func request(
         method: String,
         id: Int,
-        params: [String: Any] = [:],
+        // The RPC actor boundary only admits Sendable parameter values.
+        // JSONSerialization still consumes them as regular JSON scalars.
+        params: [String: any Sendable] = [:],
         timeout: Duration
     ) async throws -> JSONValue {
         try send(["method": method, "id": id, "params": params])

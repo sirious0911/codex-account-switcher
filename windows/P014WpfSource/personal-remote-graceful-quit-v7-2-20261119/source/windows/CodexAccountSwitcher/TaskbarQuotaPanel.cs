@@ -40,7 +40,8 @@ internal sealed class TaskbarQuotaPanel : IDisposable
     // The compact row stays 166 DIP by default; opt-in countdown gets
     // its own width, never clipping 100% + both reset countdowns.
     internal double EffectiveWidth => showResetCountdown
-        ? taskbarFontSize switch { 11 => 284, 12 => 310, _ => 340 }
+        ? taskbarFontSize switch {
+            9 => 246, 10 => 264, 11 => 284, 12 => 310, _ => 340 }
         : taskbarFontSize == 13 ? 184 : PreferredWidth;
     private TaskbarContentHost? host;
     private Window? hostedWindow;

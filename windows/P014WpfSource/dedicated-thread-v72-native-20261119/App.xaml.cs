@@ -1246,10 +1246,32 @@ public partial class App : Application
             var host = HostRuntime.Resolve(Assembly.GetExecutingAssembly());
             if (!WindowsPackagedTelegramScripts.Inspect(host).BothVerified)
                 throw new IOException("Packaged Telegram sender script hashes failed.");
-            await using var core = new CoreClient(host, Path.Combine(root, "data"), Path.Combine(root, "active"));
-            await core.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(30));
-            await core.CommandAsync("fiveHour", value: true).WaitAsync(TimeSpan.FromSeconds(10));
-            if (!File.Exists(Path.Combine(root, "data", "settings.json"))) throw new IOException("Shared settings were not persisted.");
+            var isolatedData = Path.Combine(root, "data");
+            var isolatedActive = Path.Combine(root, "active");
+            await using (var core = new CoreClient(host, isolatedData, isolatedActive))
+            {
+                await core.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                await core.CommandAsync("fiveHour", value: true).WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            var settingsPath = Path.Combine(isolatedData, "settings.json");
+            if (!File.Exists(settingsPath))
+                throw new IOException("Shared settings were not persisted.");
+            using (var saved = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(settingsPath)))
+            {
+                if (saved.RootElement.GetProperty("showsFiveHourUsage").GetBoolean() != true)
+                    throw new IOException("Isolated fiveHour preference was not persisted.");
+            }
+            // A second real SwiftHost process must load the first session's
+            // selected setting. Never uses the current user's auth/profile.
+            await using (var restarted = new CoreClient(host, isolatedData, isolatedActive))
+            {
+                await restarted.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                for (var attempt = 0; attempt < 30 &&
+                     !restarted.State.Settings.ShowsFiveHourUsage; attempt++)
+                    await Task.Delay(50);
+                if (!restarted.State.Settings.ShowsFiveHourUsage)
+                    throw new IOException("Isolated restart did not restore the fiveHour setting.");
+            }
             if (File.Exists(Path.Combine(root, "active", "auth.json"))) throw new IOException("Empty startup created an unexpected credential.");
             var monitorFixture = """
                 {"accountId":"SELFTEST_ACCOUNT","ordinaryUsageAllowed":null,

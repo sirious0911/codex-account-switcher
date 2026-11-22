@@ -175,8 +175,9 @@ await Test("Isolated MainWindow Settings renders dedicated-thread picker", () =>
             window.Show();
             window.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
             window.UpdateLayout();
-            Ensure(window.IsVisible && window.ActualWidth >= 400 &&
-                window.ActualHeight >= 250);
+            if (!(window.IsVisible && window.ActualWidth >= 400 &&
+                window.ActualHeight >= 250))
+                throw new InvalidOperationException("WPF_WINDOW_SIZE_OR_VISIBLE");
             var width = (int)Math.Ceiling(window.ActualWidth);
             var height = (int)Math.Ceiling(window.ActualHeight);
             var rendered = new System.Windows.Media.Imaging.RenderTargetBitmap(
@@ -184,8 +185,9 @@ await Test("Isolated MainWindow Settings renders dedicated-thread picker", () =>
             rendered.Render(window);
             var pixels = new byte[width * height * 4];
             rendered.CopyPixels(pixels, width * 4, 0);
-            Ensure(pixels.Where((value, i) => (i & 3) == 3)
-                .Any(value => value != 0));
+            if (!pixels.Where((value, i) => (i & 3) == 3)
+                .Any(value => value != 0))
+                throw new InvalidOperationException("WPF_RENDERED_ALPHA_EMPTY");
             static bool FindPanel(DependencyObject element)
             {
                 if (element is DedicatedThreadPickerPanel) return true;
@@ -195,10 +197,38 @@ await Test("Isolated MainWindow Settings renders dedicated-thread picker", () =>
                 return false;
             }
             visible = window.Content is DependencyObject root && FindPanel(root);
+            // Synthetic settings rendering only; never mutate the live HKCU.
+            static ComboBox? FindTaskbarFontPicker(DependencyObject element)
+            {
+                if (element is ComboBox cb &&
+                    System.Windows.Automation.AutomationProperties.GetName(cb) ==
+                        "작업표시줄 글자 크기")
+                    return cb;
+                foreach (var child in LogicalTreeHelper.GetChildren(element))
+                    if (child is DependencyObject d &&
+                        FindTaskbarFontPicker(d) is { } found)
+                        return found;
+                return null;
+            }
+            var sizePicker = window.Content is DependencyObject settingsRoot
+                ? FindTaskbarFontPicker(settingsRoot) : null;
+            if (sizePicker is null)
+                throw new InvalidOperationException("TASKBAR_FONT_PICKER_NOT_FOUND");
+            if (sizePicker.Items.Count != 5)
+                throw new InvalidOperationException("TASKBAR_FONT_PICKER_COUNT_" + sizePicker.Items.Count);
+            if (!(sizePicker.Items[0]?.ToString()?.Contains("(9)") == true &&
+                  sizePicker.Items[1]?.ToString()?.Contains("(10)") == true &&
+                  sizePicker.Items[3]?.ToString()?.Contains("(12)") == true))
+                throw new InvalidOperationException("TASKBAR_FONT_PICKER_OPTIONS_MISSING");
+            if (sizePicker.SelectedIndex is < 0 or > 4)
+                throw new InvalidOperationException("TASKBAR_FONT_PICKER_SELECTED_INVALID");
             window.CloseForExit();
             app.Shutdown();
         }
-        catch (Exception ex) { failure = ex; }
+        catch (Exception ex) {
+            Console.WriteLine("SYNTHETIC_SETTINGS_FAILURE=" + ex.Message);
+            failure = ex;
+        }
     });
     thread.SetApartmentState(ApartmentState.STA);
     thread.Start();
@@ -511,6 +541,32 @@ await Test("5H zero Alert Bot has pinned no-send route and one durable event key
             hostPath, bot, zero) is null);
     }
     finally { if (Directory.Exists(synthetic)) Directory.Delete(synthetic, true); }
+    return Task.CompletedTask;
+});
+await Test("Windows adaptive quota refresh respects activity reset and account gate", () => {
+    var start = windowBoundary.AddHours(-2);
+    var policy = new AdaptiveUsageRefreshPolicy(start);
+    var account = Snapshot(profileId);
+    Ensure(!policy.TrySchedule(start, true, account));
+    Ensure(!policy.TrySchedule(start.AddSeconds(59), true, account));
+    Ensure(policy.TrySchedule(start.AddMinutes(1), true, account));
+    Ensure(!policy.TrySchedule(start.AddMinutes(1).AddSeconds(30), true, account));
+    Ensure(!policy.TrySchedule(start.AddMinutes(1).AddSeconds(41), true, account));
+    Ensure(policy.ConsecutiveMisses == 1);
+    // Missing provider observation slows reads to the 2-minute interval.
+    Ensure(policy.TrySchedule(start.AddMinutes(3), true, account));
+    policy.Observed(profileId, start.AddMinutes(3).AddSeconds(10),
+        fiveHourNextResetAt: start.AddMinutes(6));
+    // Near reset, allow a 1-minute poll even when no work is active.
+    Ensure(!policy.TrySchedule(start.AddMinutes(3).AddSeconds(30), false, account));
+    Ensure(policy.TrySchedule(start.AddMinutes(4).AddSeconds(11), false, account));
+    // Unconfirmed account and account mutation always suppress polling.
+    Ensure(!policy.TrySchedule(start.AddMinutes(5), true,
+        Snapshot(profileId, mutating: true)));
+    Ensure(policy.ActiveProfile is null);
+    Ensure(!policy.TrySchedule(start.AddMinutes(6), false, account));
+    Ensure(!policy.TrySchedule(start.AddMinutes(7), true,
+        Snapshot(profileId, confirmed: false)));
     return Task.CompletedTask;
 });
 await Test("Scheduled 5H deadline observed but not emitted early", () => {

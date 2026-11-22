@@ -866,13 +866,14 @@ public sealed class MainWindow : Window
         var taskbarFontSize = new ComboBox {
             Width = 160,
             VerticalAlignment = VerticalAlignment.Center,
-            ItemsSource = new[] { "작게 (11)", "보통 (12)", "크게 (13)" },
-            SelectedIndex = native.TaskbarFontSize - 11
+            ItemsSource = new[] { "아주 작게 (9)", "더 작게 (10)",
+                "작게 (11)", "보통 (12)", "크게 (13)" },
+            SelectedIndex = native.TaskbarFontSize - 9
         };
         AutomationProperties.SetName(taskbarFontSize, "작업표시줄 글자 크기");
         taskbarFontSize.SelectionChanged += (_, _) => {
-            if (taskbarFontSize.SelectedIndex is >= 0 and <= 2)
-                native.TaskbarFontSize = 11 + taskbarFontSize.SelectedIndex;
+            if (taskbarFontSize.SelectedIndex is >= 0 and <= 4)
+                native.TaskbarFontSize = 9 + taskbarFontSize.SelectedIndex;
         };
         var taskbarFontRow = Pair(Text("사용량 글자 크기"), taskbarFontSize);
         taskbarFontRow.Height = 48;

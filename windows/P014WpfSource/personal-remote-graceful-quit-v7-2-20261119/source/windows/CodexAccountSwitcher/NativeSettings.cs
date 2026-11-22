@@ -59,18 +59,18 @@ public sealed class NativeSettings
         }
     }
 
-    // Default is 12 DIP. All three options are bounded and user-selectable.
+    // Default 12 DIP. Allow 9/10 DIP for the requested compact taskbar display.
     public int TaskbarFontSize
     {
         get
         {
             using var key = Registry.CurrentUser.OpenSubKey(Key);
-            return key?.GetValue("TaskbarFontSize") is int size && size is >= 11 and <= 13
+            return key?.GetValue("TaskbarFontSize") is int size && size is >= 9 and <= 13
                 ? size : 12;
         }
         set
         {
-            if (value is < 11 or > 13) throw new ArgumentOutOfRangeException(nameof(value));
+            if (value is < 9 or > 13) throw new ArgumentOutOfRangeException(nameof(value));
             using var key = Registry.CurrentUser.CreateSubKey(Key);
             key.SetValue("TaskbarFontSize", value, RegistryValueKind.DWord);
             Changed?.Invoke();

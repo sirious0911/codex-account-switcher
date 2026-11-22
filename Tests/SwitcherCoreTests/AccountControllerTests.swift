@@ -171,15 +171,40 @@ struct AccountControllerTests {
         #expect(await fixture.client.activeQuotaReadCount == 2)
     }
 
-    @Test func mismatchedActiveCredentialCannotSeedIdleResetWatch() async throws {
+    @Test func externalLoginChangeSeedsOnlyTheNewVerifiedActiveIdentity() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        let old = try #require(fixture.model.activeAccountID)
+        var published: [(UUID, String)] = []
+        fixture.model.onFreshVerifiedActiveQuota = { id, accountID, _ in
+            published.append((id, accountID))
+        }
+        let newLogin = Data(#"{"tokens":{"account_id":"other-provider"}}"#.utf8)
+        try newLogin.write(to: fixture.active.appendingPathComponent("auth.json"))
+        // The existing controller explicitly syncs external login changes.
+        // A newly verified account is allowed, but OLD quota identity cannot
+        // be attributed to that newly active account.
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        let current = try #require(fixture.model.activeAccountID)
+        #expect(current != old)
+        #expect(published.count == 1)
+        #expect(published.first?.0 == current)
+        #expect(published.first?.1 == "other-provider")
+        #expect(published.first?.0 != old)
+    }
+
+    @Test func invalidLiveCredentialNeverPublishesStartupQuota() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }
         try fixture.writeActiveCredential()
         await fixture.model.start()
         var published = 0
         fixture.model.onFreshVerifiedActiveQuota = { _, _, _ in published += 1 }
-        let bad = Data(#"{"tokens":{"account_id":"other-provider"}}"#.utf8)
-        try bad.write(to: fixture.active.appendingPathComponent("auth.json"))
+        try Data("not-json".utf8).write(
+            to: fixture.active.appendingPathComponent("auth.json"))
         fixture.model.refreshWeeklyUsage()
         await fixture.model.waitForWeeklyUsageRefresh()
         #expect(published == 0)

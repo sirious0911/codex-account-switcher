@@ -222,6 +222,22 @@ await Test("Isolated MainWindow Settings renders dedicated-thread picker", () =>
                 throw new InvalidOperationException("TASKBAR_FONT_PICKER_OPTIONS_MISSING");
             if (sizePicker.SelectedIndex is < 0 or > 4)
                 throw new InvalidOperationException("TASKBAR_FONT_PICKER_SELECTED_INVALID");
+            // Same synthetic STA, second settings GUI. No HKCU writes.
+            var trialWindow = new MainWindow(fake,
+                new NativeSettings(blockWrites: true));
+            trialWindow.Navigate("settings");
+            trialWindow.ShowInTaskbar = false;
+            trialWindow.ShowActivated = false;
+            trialWindow.WindowStartupLocation = WindowStartupLocation.Manual;
+            trialWindow.Left = -9000;
+            trialWindow.Top = -9000;
+            trialWindow.Show();
+            trialWindow.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+            trialWindow.UpdateLayout();
+            var trialPicker = trialWindow.Content is DependencyObject trialRoot
+                ? FindTaskbarFontPicker(trialRoot) : null;
+            Ensure(trialPicker is { IsEnabled: false });
+            trialWindow.CloseForExit();
             window.CloseForExit();
             app.Shutdown();
         }
@@ -236,6 +252,26 @@ await Test("Isolated MainWindow Settings renders dedicated-thread picker", () =>
         throw new TimeoutException("Isolated settings STA");
     if (failure is not null) throw failure;
     Ensure(visible);
+    return Task.CompletedTask;
+});
+await Test("Windows basic viewer trial rejects all native HKCU setting writes", () => {
+    var trial = new NativeSettings(blockWrites: true);
+    Ensure(trial.IsReadOnly);
+    var attempts = new Action[] {
+        () => trial.LaunchAtLogin = false,
+        () => trial.AutomaticallyCheckUpdates = false,
+        () => trial.ShowTaskbarResetCountdown = false,
+        () => trial.TaskbarFontSize = 9,
+        () => trial.SetTelegramPreferences(new TelegramNotificationPreferences()),
+        () => trial.SetTelegramBotDirectory(null)
+    };
+    foreach (var change in attempts)
+    {
+        var blocked = false;
+        try { change(); }
+        catch (InvalidOperationException) { blocked = true; }
+        Ensure(blocked);
+    }
     return Task.CompletedTask;
 });
 await Test("V7.2 RemoteGracefulQuit owner channel remains compiled", () => {

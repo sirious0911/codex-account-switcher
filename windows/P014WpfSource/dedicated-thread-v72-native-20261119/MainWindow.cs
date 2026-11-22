@@ -181,6 +181,12 @@ public sealed class MainWindow : Window
     }
     private async Task Run(string command, Guid? id = null, bool? value = null, string? language = null)
     {
+        if (native.IsReadOnly)
+        {
+            localError = "기본 GUI 비송신 시험에서는 계정 및 설정 변경이 차단됩니다.";
+            Render();
+            return;
+        }
         try { await client.CommandAsync(command, id, value, language); }
         catch (Exception ex) { localError = ex.Message; Render(); }
     }
@@ -1341,6 +1347,15 @@ public sealed class MainWindow : Window
                 catch (Exception ex) { localError = ex.Message; Render(); }
             });
             settings.Children.Add(copyBuildID);
+        }
+        if (native.IsReadOnly)
+        {
+            // Normal viewer GUI: preserve the full settings layout, but
+            // disable all controls to protect existing HKCU and Telegram.
+            settings.IsEnabled = false;
+            body.Children.Add(Text(
+                "비송신 시험: 화면·사용량 조회만 가능하며 모든 설정 변경은 차단됩니다.",
+                12, muted: false, bold: true));
         }
         body.Children.Add(settings);
     }

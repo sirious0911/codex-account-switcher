@@ -91,11 +91,17 @@ public partial class App : Application
     private DispatcherTimer? updates;
     private bool exiting;
     private bool step2ReadOnlyPreview;
+    private bool basicViewerNoSend; // Full GUI, explicit disabled-sender trial.
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
         if (!startRuntime) return;
+        if (e.Args.Contains("--step2-basic-viewer-no-send", StringComparer.Ordinal))
+        {
+            if (e.Args.Length != 1) { Shutdown(2); return; }
+            basicViewerNoSend = true;
+        }
         // STEP 2 one-shot actual quota probe for the EXACT active account.
         // This runs BEFORE any normal startup and cannot create Owner,
         // Telegram sender, CoreClient, account switch or Codex turn.
@@ -201,21 +207,27 @@ public partial class App : Application
             var hostPath = HostRuntime.Resolve(Assembly.GetExecutingAssembly());
             var bundledBotScripts = WindowsPackagedTelegramScripts.Inspect(hostPath);
             bundledTelegramHostPath = hostPath;
-            client = new CoreClient(hostPath, dataPath);
+            client = new CoreClient(hostPath, dataPath,
+                blockMutatingCommands: basicViewerNoSend);
             // Read-only local binding preflight; no Codex turn transport.
-            resetBindingPreflight = new DedicatedResetBindingPreflight(dataPath);
-            resetAutoDraftStore = new CodexAutoSendDraftStore(dataPath);
+            if (!basicViewerNoSend)
+            {
+                resetBindingPreflight = new DedicatedResetBindingPreflight(dataPath);
+                resetAutoDraftStore = new CodexAutoSendDraftStore(dataPath);
+            }
             // Reuse trusted active-monitor due events in one product path.
             // No sender enrollment, transport, or automatic Codex turn exists
             // in the currently installed app or this staged candidate.
             var codexDueIdentity = new PersonalExistingThreadContext(client,dataPath);
-            codexDueDispatcher = new CodexDueDispatchBridge(
-                codexDueIdentity.CurrentIdentity,
-                binding => resetAutoDraftStore.ReadFor(binding),
-                exclusiveSenderReady: () => WindowsOwnerReadOnlyAdmission.IsReady(dataPath),
-                sendThroughAuthority: (due,binding,ct) =>
-                    CodexDueIpcEnrollment.DeliverAsync(
-                        dataPath,due,binding,ct));
+            if (!basicViewerNoSend)
+                codexDueDispatcher = new CodexDueDispatchBridge(
+                    codexDueIdentity.CurrentIdentity,
+                    binding => resetAutoDraftStore!.ReadFor(binding),
+                    exclusiveSenderReady: () =>
+                        WindowsOwnerReadOnlyAdmission.IsReady(dataPath),
+                    sendThroughAuthority: (due,binding,ct) =>
+                        CodexDueIpcEnrollment.DeliverAsync(
+                            dataPath,due,binding,ct));
             // Default OFF: App() and App(bool) do not supply an enrollment.
             // Only an explicit internal synthetic test constructor creates a
             // V2 sender. Never read credentials or transmit in normal startup.
@@ -228,12 +240,16 @@ public partial class App : Application
                     new CoreClientQuotaEventAdapter(client),
                     testEnrollment.SourceDeviceID, syntheticV2Publisher);
             }
-            monitorWorker = new LocalMonitorWorker(dataPath);
-            weekly100Worker = new Weekly100RecoveryWorker(dataPath);
-            fiveHour100Worker = new FiveHour100RecoveryWorker(dataPath);
-            telegramOutbox = new WindowsAmanoProductionOutbox(dataPath);
-            restartUserIntent = new WindowsTelegramRestartIntentStore(dataPath);
-            try { stickyAutoConsent = new WindowsTelegramStickyAutoConsentStore(dataPath); }
+            if (!basicViewerNoSend)
+            {
+                monitorWorker = new LocalMonitorWorker(dataPath);
+                weekly100Worker = new Weekly100RecoveryWorker(dataPath);
+                fiveHour100Worker = new FiveHour100RecoveryWorker(dataPath);
+                telegramOutbox = new WindowsAmanoProductionOutbox(dataPath);
+                restartUserIntent = new WindowsTelegramRestartIntentStore(dataPath);
+            }
+            try { if (!basicViewerNoSend)
+                    stickyAutoConsent = new WindowsTelegramStickyAutoConsentStore(dataPath); }
             catch (Exception error) when (error is IOException or UnauthorizedAccessException
                 or ArgumentException or System.Security.Cryptography.CryptographicException
                 or System.Security.SecurityException)
@@ -242,14 +258,15 @@ public partial class App : Application
                 System.Diagnostics.Trace.TraceWarning(
                     "Persistent Telegram consent unavailable: " + error.GetType().Name);
             }
-            autoTelegramDispatcher = new WindowsTelegramAutoRecoveryDispatcher(
-                autoTelegramSession, telegramOutbox,
-                WindowsExistingAmanoBotProcessAdapter.CreateWindowsTransport());
+            if (!basicViewerNoSend && telegramOutbox is not null)
+                autoTelegramDispatcher = new WindowsTelegramAutoRecoveryDispatcher(
+                    autoTelegramSession, telegramOutbox,
+                    WindowsExistingAmanoBotProcessAdapter.CreateWindowsTransport());
             client.MonitorObserved += OnMonitorObserved;
             client.SwitchRequested += OnSwitchRequested;
-            var native = new NativeSettings();
+            var native = new NativeSettings(blockWrites: basicViewerNoSend);
             nativeSettings = native;
-            try {
+            if (!basicViewerNoSend) try {
                 localTelegramSender = new WindowsTelegramLocalSenderLease(dataPath);
                 RefreshLocalTelegramSender();
                 native.TelegramRoutingChanged += RefreshLocalTelegramSender;
@@ -276,13 +293,16 @@ public partial class App : Application
                 ProbeSharedAuthorityStatusReadOnlyAsync,
                 () => restartUserIntent?.Read() ??
                     WindowsTelegramRestartIntentStatus.InvalidOrUnreadable,
-                desired => restartUserIntent?.ChangeByUser(
+                desired => !basicViewerNoSend && restartUserIntent?.ChangeByUser(
                     desired, DateTimeOffset.UtcNow, explicitConfirmation: true) == true,
                 DescribeRestartReadiness,
-                () => stickyAutoConsent?.IsEnabledFor(
-                    native.TelegramPreferences, native.TelegramBotDirectory) == true,
-                dataPath);
+                () => !basicViewerNoSend &&
+                    stickyAutoConsent?.IsEnabledFor(
+                        native.TelegramPreferences, native.TelegramBotDirectory) == true,
+                basicViewerNoSend ? null : dataPath);
             MainWindow = window;
+            if (basicViewerNoSend)
+                window.Title = "Codex Switcher · 기본 화면 비송신 시험";
             activationListener = ThreadPool.RegisterWaitForSingleObject(activateWindow, (_, _) =>
                 Dispatcher.BeginInvoke(new Action(() => { if (!exiting) { ApplyTheme(); window.OpenWindow(); } })),
                 null, Timeout.Infinite, false);
@@ -298,7 +318,7 @@ public partial class App : Application
             // The exact CURRENT Codex account is checked again inside DPAPI
             // bootstrap, not merely the static pinned chat UUID.
             var startupState=client.State;
-            if(startupState.ActiveIdentityConfirmed &&
+            if(!basicViewerNoSend && startupState.ActiveIdentityConfirmed &&
                !startupState.IsMutating &&
                startupState.ActiveAccountID is Guid startupProfile &&
                startupProfile!=Guid.Empty &&
@@ -314,7 +334,8 @@ public partial class App : Application
                 System.Diagnostics.Trace.TraceInformation(
                     "Codex dedicated Owner startup gate: " + ownerCandidate.State);
             }
-            TryRestoreWindowsOnlyTelegramConsent();
+            if (!basicViewerNoSend)
+                TryRestoreWindowsOnlyTelegramConsent();
             remoteQuitChannel = new RemoteGracefulQuitChannel(dataPath,
                 Dispatcher, RemoteQuitReady, RemoteQuitReserve,
                 () => remoteQuitPending = false,
@@ -351,12 +372,16 @@ public partial class App : Application
                 InspectDueResetPreview(now);
                 _ = RecoverCodexOwnerIfNeededAsync(now);
             };
-            resetPreviewTimer.Start();
+            if (!basicViewerNoSend)
+                resetPreviewTimer.Start();
             if (!e.Args.Contains("--background")) window.OpenWindow();
             updates = new DispatcherTimer { Interval = TimeSpan.FromHours(1) };
             updates.Tick += async (_, _) => { if (native.AutomaticallyCheckUpdates) await native.CheckUpdatesAsync(); };
-            updates.Start();
-            if (native.AutomaticallyCheckUpdates) _ = native.CheckUpdatesAsync();
+            if (!basicViewerNoSend)
+            {
+                updates.Start();
+                if (native.AutomaticallyCheckUpdates) _ = native.CheckUpdatesAsync();
+            }
         } catch (Exception ex) {
             MessageBox.Show(ex.Message, "Codex Account Switcher Personal", MessageBoxButton.OK, MessageBoxImage.Error);
             await QuitAsync();
@@ -393,8 +418,8 @@ public partial class App : Application
 
     private void RefreshLocalTelegramSender()
     {
-        if (exiting || nativeSettings is null || localTelegramSender is null)
-            return;
+        if (basicViewerNoSend || exiting || nativeSettings is null ||
+            localTelegramSender is null) return;
         if (!Dispatcher.CheckAccess()) {
             Dispatcher.BeginInvoke(new Action(RefreshLocalTelegramSender));
             return;
@@ -422,7 +447,8 @@ public partial class App : Application
         // UNCERTAIN is terminal/non-retryable; it must NEVER be replayed,
         // but after the previous app has cleanly exited it need not block
         // brand-new, different event keys on the same Windows-only Sender.
-        if (exiting || nativeSettings is null || stickyAutoConsent is null ||
+        if (basicViewerNoSend || exiting || nativeSettings is null ||
+            stickyAutoConsent is null ||
             localTelegramSender is null || bundledTelegramHostPath is null ||
             telegramOutbox is null || !Dispatcher.CheckAccess())
             return;
@@ -472,6 +498,22 @@ public partial class App : Application
 
     private void OnMonitorObserved(CodexMonitorWireSample sample)
     {
+        if (basicViewerNoSend)
+        {
+            // Same normal SwiftHost active-account observations as the
+            // product; no persistent monitor/outbox/due-worker writes.
+            if (!externalMonitorGate.Allows(sample)) return;
+            void AcceptActive()
+            {
+                if (exiting || !externalMonitorGate.Allows(sample)) return;
+                if (sample.ProfileID is Guid id)
+                    adaptiveUsage?.ObserveFreshActiveSample(id, sample);
+                taskbarPanel?.Accept(sample);
+            }
+            if (Dispatcher.CheckAccess()) AcceptActive();
+            else Dispatcher.BeginInvoke(new Action(AcceptActive));
+            return;
+        }
         try { monitorWorker?.Process(sample); }
         catch (Exception ex) {
             // Monitoring is supplementary: a failed local preview does not
@@ -524,6 +566,7 @@ public partial class App : Application
 
     private void InspectDueResetPreview(DateTimeOffset nowUtc)
     {
+        if (basicViewerNoSend) return;
         if (exiting || client is null || !Dispatcher.CheckAccess())
             return;
         // A scheduled deadline is one-shot. If the separately provisioned
@@ -614,6 +657,7 @@ public partial class App : Application
 
     private void ProcessWeekly100Candidate(CodexMonitorWireSample sample)
     {
+        if (basicViewerNoSend) return;
         // Only an already-authorized active profile can enter the local
         // 7D alert detector. No Telegram transport exists in this method.
         try {
@@ -635,6 +679,7 @@ public partial class App : Application
 
     private void ProcessFiveHour100Candidate(CodexMonitorWireSample sample)
     {
+        if (basicViewerNoSend) return;
         // A separate local mock ledger for 5H recovery. Never routes or
         // sends a real Telegram message, irrespective of the bot's mute state.
         try {
@@ -665,6 +710,7 @@ public partial class App : Application
 
     private void StageFiveHourZeroImportantNoSend(FiveHour100Alert alert)
     {
+        if (basicViewerNoSend) return;
         // Fail closed: never let an important 5H event enter the ordinary
         // Monitor sender or the auto-delivery coordinator. The dedicated
         // important sender has no production dispatch authorization.
@@ -685,6 +731,7 @@ public partial class App : Application
     private void PrepareExistingAmanoRoute(
         TelegramNotificationLane lane, string eventKey, DateTimeOffset observedAt)
     {
+        if (basicViewerNoSend) return;
         // The already-running Amano scripts and their bot credentials are
         // untouched. Preparing a Codex-specific route never starts a process.
         // Only a separately armed in-memory session may auto-dispatch a new
@@ -766,6 +813,8 @@ public partial class App : Application
 
     private WindowsTelegramHandoffStatus StopWindowsTelegramSenderForHandoff()
     {
+        if (basicViewerNoSend)
+            return WindowsTelegramHandoffStatus.LocalReleaseNotVerified;
         // Only the user's explicit WPF click invokes this. Nothing on the
         // Mac or any third-party application is modified.
         if (!Dispatcher.CheckAccess() || exiting || nativeSettings is null ||
@@ -793,9 +842,9 @@ public partial class App : Application
     {
         // Invoked only from a WPF UI click. Never from saved preferences,
         // startup, background update, the detector or app CLI flags.
-        if (!Dispatcher.CheckAccess() || exiting || nativeSettings is null ||
-            localTelegramSender is null || bundledTelegramHostPath is null)
-            return false;
+        if (basicViewerNoSend || !Dispatcher.CheckAccess() || exiting ||
+            nativeSettings is null || localTelegramSender is null ||
+            bundledTelegramHostPath is null) return false;
 
         autoTelegramSession.Disarm();
         if (!enable)
@@ -868,8 +917,8 @@ public partial class App : Application
         // records from previous runs and all connectivity tests cannot replay.
         try
         {
-            if (exiting || remoteQuitPending || !Dispatcher.CheckAccess() ||
-                autoTelegramDispatcher is null ||
+            if (basicViewerNoSend || exiting || remoteQuitPending ||
+                !Dispatcher.CheckAccess() || autoTelegramDispatcher is null ||
                 nativeSettings is null || localTelegramSender is null)
                 return;
             Interlocked.Increment(ref telegramSendActivities);
@@ -916,9 +965,10 @@ public partial class App : Application
     {
         // Creates only a clearly labelled, user-reviewed pending TEST event.
         // No Telegram network, credential read, sender execution or approval.
-        if (exiting || !Dispatcher.CheckAccess() || telegramOutbox is null ||
-            nativeSettings is null || bundledTelegramHostPath is null)
-            return "연결 테스트 대기함을 사용할 수 없습니다. 발송 없음";
+        if (basicViewerNoSend || exiting || !Dispatcher.CheckAccess() ||
+            telegramOutbox is null || nativeSettings is null ||
+            bundledTelegramHostPath is null)
+            return "비송신 기본 GUI 시험: Telegram 연결 테스트 차단";
         try
         {
             var preferences = nativeSettings.TelegramPreferences;
@@ -955,8 +1005,8 @@ public partial class App : Application
     {
         // The sole entry point for real Telegram transmission is an explicit
         // per-event, double-confirmed WPF click. No monitor callback invokes it.
-        if (exiting || remoteQuitPending || !Dispatcher.CheckAccess() ||
-            !otherHostsNotSendingConfirmed ||
+        if (basicViewerNoSend || exiting || remoteQuitPending ||
+            !Dispatcher.CheckAccess() || !otherHostsNotSendingConfirmed ||
             telegramOutbox is null || nativeSettings is null ||
             bundledTelegramHostPath is null || localTelegramSender is null)
             return "발송 조건 미충족 · 메시지 전송 없음";
@@ -1052,8 +1102,11 @@ public partial class App : Application
         if (externalMonitorGate.Observe(state)) {
             resetPreview.Invalidate();
             taskbarPanel?.Invalidate();
-            InvalidateWeekly100(previouslyActive);
-            InvalidateFiveHour100(previouslyActive);
+            if (!basicViewerNoSend)
+            {
+                InvalidateWeekly100(previouslyActive);
+                InvalidateFiveHour100(previouslyActive);
+            }
         }
         // On a Free/partial plan there can be no weekly quota observation.
         // Accept only a confirmed active profile's *actual*, newly received
@@ -1078,7 +1131,7 @@ public partial class App : Application
 
     private async Task RecoverCodexOwnerIfNeededAsync(DateTimeOffset now)
     {
-        if(exiting || ownerRecoveryInProgress || client is null ||
+        if(basicViewerNoSend || exiting || ownerRecoveryInProgress || client is null ||
            string.IsNullOrWhiteSpace(ownerAppDataHome))
             return;
 
@@ -1263,9 +1316,15 @@ public partial class App : Application
             }
             // A second real SwiftHost process must load the first session's
             // selected setting. Never uses the current user's auth/profile.
-            await using (var restarted = new CoreClient(host, isolatedData, isolatedActive))
+            await using (var restarted = new CoreClient(host, isolatedData, isolatedActive,
+                blockMutatingCommands: true))
             {
                 await restarted.InitializeAsync().WaitAsync(TimeSpan.FromSeconds(30));
+                bool deniedSwitch = false;
+                try { await restarted.CommandAsync("switch", accountID: Guid.NewGuid()); }
+                catch (InvalidOperationException) { deniedSwitch = true; }
+                if (!deniedSwitch)
+                    throw new IOException("Viewer trial allowed a real account mutation.");
                 for (var attempt = 0; attempt < 30 &&
                      !restarted.State.Settings.ShowsFiveHourUsage; attempt++)
                     await Task.Delay(50);

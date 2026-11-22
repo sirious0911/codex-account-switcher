@@ -14,6 +14,15 @@ public sealed class NativeSettings
 {
     private const string Key = @"Software\Sirious0911\CodexAccountSwitcher";
     private const string Run = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private readonly bool blockWrites;
+    public bool IsReadOnly => blockWrites;
+    public NativeSettings(bool blockWrites = false) => this.blockWrites = blockWrites;
+    private void EnsureWritable()
+    {
+        if (blockWrites)
+            throw new InvalidOperationException(
+                "Viewer trial: Windows registry settings are read-only.");
+    }
     public string Version => typeof(NativeSettings).Assembly.GetName().Version!.ToString(3);
 
     // The actual running executable distinguishes same-version personal RC builds.
@@ -34,13 +43,13 @@ public sealed class NativeSettings
     public string? RunningExecutableSha256 => RunningExecutableHash.Value;
     public bool LaunchAtLogin {
         get { using var key = Registry.CurrentUser.OpenSubKey(Run); return key?.GetValue("CodexAccountSwitcherPersonal") is string; }
-        set { using var key = Registry.CurrentUser.CreateSubKey(Run);
+        set { EnsureWritable(); using var key = Registry.CurrentUser.CreateSubKey(Run);
             if (value) key.SetValue("CodexAccountSwitcherPersonal", "\"" + Environment.ProcessPath + "\" --background");
             else key.DeleteValue("CodexAccountSwitcherPersonal", false); }
     }
     public bool AutomaticallyCheckUpdates {
         get { using var key = Registry.CurrentUser.OpenSubKey(Key); return key?.GetValue("AutomaticallyCheckUpdates") is not int number || number != 0; }
-        set { using var key = Registry.CurrentUser.CreateSubKey(Key); key.SetValue("AutomaticallyCheckUpdates", value ? 1 : 0); }
+        set { EnsureWritable(); using var key = Registry.CurrentUser.CreateSubKey(Key); key.SetValue("AutomaticallyCheckUpdates", value ? 1 : 0); }
     }
     // Per-user taskbar display only. No influence on Codex account credentials,
     // actual quota observations or Telegram authorization.
@@ -53,6 +62,7 @@ public sealed class NativeSettings
         }
         set
         {
+            EnsureWritable();
             using var key = Registry.CurrentUser.CreateSubKey(Key);
             key.SetValue("ShowTaskbarResetCountdown", value ? 1 : 0, RegistryValueKind.DWord);
             Changed?.Invoke();
@@ -70,6 +80,7 @@ public sealed class NativeSettings
         }
         set
         {
+            EnsureWritable();
             if (value is < 9 or > 13) throw new ArgumentOutOfRangeException(nameof(value));
             using var key = Registry.CurrentUser.CreateSubKey(Key);
             key.SetValue("TaskbarFontSize", value, RegistryValueKind.DWord);
@@ -101,6 +112,7 @@ public sealed class NativeSettings
 
     public void SetTelegramPreferences(TelegramNotificationPreferences preferences)
     {
+        EnsureWritable();
         ArgumentNullException.ThrowIfNull(preferences);
         var selected = preferences.Normalize();
         using var key = Registry.CurrentUser.CreateSubKey(Key);
@@ -131,6 +143,7 @@ public sealed class NativeSettings
 
     public void SetTelegramBotDirectory(string? selectedDirectory)
     {
+        EnsureWritable();
         var normalized = string.IsNullOrWhiteSpace(selectedDirectory)
             ? null : NormalizeTelegramBotDirectory(selectedDirectory);
         if (selectedDirectory is not null && normalized is null)

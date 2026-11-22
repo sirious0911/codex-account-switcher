@@ -17,6 +17,7 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
     private readonly Task stderr;
     private readonly DesktopController desktop = new(ct => DesktopController.DiscoverAsync(null, ct));
     private int nextID;
+    private readonly bool blockMutatingCommands;
     public AccountSnapshot State { get; private set; } = AccountSnapshot.Empty;
     public event Action? Changed;
     /// Successful fresh quota samples from Swift, independent from cached UI snapshots.
@@ -24,8 +25,10 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
     /// Signals before a real switch command is sent, so the minibar clears immediately.
     public event Action? SwitchRequested;
 
-    public CoreClient(string hostPath, string dataPath, string? activeHome = null)
+    public CoreClient(string hostPath, string dataPath, string? activeHome = null,
+        bool blockMutatingCommands = false)
     {
+        this.blockMutatingCommands = blockMutatingCommands;
         context = SynchronizationContext.Current ?? new SynchronizationContext();
         var start = new ProcessStartInfo(hostPath) {
             UseShellExecute = false, CreateNoWindow = true,
@@ -47,6 +50,11 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
     public Task InitializeAsync() => SendAsync(new { command = "initialize" });
     public Task CommandAsync(string command, Guid? accountID = null, bool? value = null, string? language = null)
     {
+        // Normal GUI viewer trial: only quota refresh, never a profile/account
+        // mutation, Desktop close/reopen, greeting or persisted user setting.
+        if (blockMutatingCommands && command != "refreshActive")
+            return Task.FromException(new InvalidOperationException(
+                "Viewer trial: account and preference changes are disabled."));
         if (command == "switch") SwitchRequested?.Invoke();
         return SendAsync(new { command, accountID, value, language });
     }
@@ -121,6 +129,8 @@ public sealed class CoreClient : IAccountClient, IAsyncDisposable
     {
         string? error = null;
         try {
+            if (blockMutatingCommands)
+                throw new IOException("Viewer trial: platform/browser/desktop control blocked.");
             switch (message.GetProperty("method").GetString()) {
                 case "openBrowser":
                     var url = new Uri(message.GetProperty("url").GetString()!);

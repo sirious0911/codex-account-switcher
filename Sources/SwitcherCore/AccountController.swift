@@ -98,6 +98,39 @@ open class AccountController {
         await usageRefreshTask?.value
     }
 
+    /// One additional quota read for only the verified live Codex profile.
+    /// Does not run account registration, switch, browser login, auto reset,
+    /// or all-profile refresh. Nil is a fail-closed NO_OBSERVATION result.
+    public func readVerifiedActiveQuota() async throws ->
+        (profileID: UUID, accountID: String, usage: WeeklyUsage)?
+    {
+        guard !isMutating, !isAddingAccount, activeIdentityConfirmed,
+              usageRefreshTask == nil, let selected = activeAccountID,
+              let proof = try await store.verifiedActiveQuotaProfile(),
+              proof.id == selected, let providerID = proof.accountID,
+              !providerID.isEmpty, providerID.utf8.count <= 256,
+              !providerID.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+              })
+        else { return nil }
+
+        let home = await store.profileHome(id: selected)
+        let usage = try await codex.readWeeklyUsage(profileHome: home)
+        guard !Task.isCancelled, !isMutating, !isAddingAccount,
+              activeIdentityConfirmed, usageRefreshTask == nil,
+              activeAccountID == selected,
+              let stillVerified = try await store.verifiedActiveQuotaProfile(),
+              stillVerified.id == selected,
+              stillVerified.accountID == providerID
+        else { return nil }
+
+        usageStates[selected] = .loaded(usage)
+        // A displayable fresh response must not turn into a stale result if
+        // the optional local cache write happens to fail.
+        try? await store.cacheWeeklyUsage(usage, profileID: selected)
+        return (selected, providerID, usage)
+    }
+
     private func refreshSubscriptionSnapshots() async {
         var snapshots: [UUID: SubscriptionSnapshot] = [:]
         for account in accounts {

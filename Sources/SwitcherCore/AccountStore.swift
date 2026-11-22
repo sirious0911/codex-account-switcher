@@ -260,6 +260,24 @@ public actor AccountStore: AccountStoring {
         }
     }
 
+    /// Read-only proof for extra active-only quota polls. Unlike
+    /// syncActiveCredential(), this never imports/copies credentials or
+    /// changes the account registry. Both the live login and the profile
+    /// credential must match the SAME registered provider account ID.
+    public func verifiedActiveQuotaProfile() throws -> AccountProfile? {
+        let current = try loadRegistry()
+        guard let id = current.activeAccountID,
+              let profile = current.accounts.first(where: { $0.id == id }),
+              let expectedID = profile.accountID,
+              !expectedID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let live = try CredentialIdentity.read(from: activeHomeURL),
+              let stored = try CredentialIdentity.read(from: profileHome(id: id)),
+              live.matches(profile), stored.matches(profile),
+              live.accountID == expectedID, stored.accountID == expectedID
+        else { return nil }
+        return profile
+    }
+
     /// The live login determines the active profile. Identify and save the same credential bytes.
     public func syncActiveCredential() throws -> AccountRegistry {
         var current = try loadRegistry()

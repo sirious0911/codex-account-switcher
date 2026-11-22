@@ -85,6 +85,13 @@ private final class Host {
         guard let model = controller else { throw HostError.message("Initialize the host first.") }
         switch request.command {
         case "refresh": model.refreshWeeklyUsage()
+        case "refreshActive":
+            if let verified = try await model.readVerifiedActiveQuota() {
+                sendActiveQuotaObservation(
+                    profileID: verified.profileID,
+                    accountID: verified.accountID,
+                    usage: verified.usage)
+            }
         case "add": model.addAccount()
         case "cancelAdd": model.cancelAddingAccount()
         case "register": await model.registerCurrentAccount()
@@ -116,6 +123,59 @@ private final class Host {
         case "dismissError": model.dismissError()
         default: throw HostError.message("Unknown host command.")
         }
+    }
+
+    /// Exact, schema-limited local IPC output accepted by the Windows
+    /// SwiftHostStrictEnvelopeV1Review. No token, email, reset-credit ID,
+    /// chatbot or device identity is included.
+    private func sendActiveQuotaObservation(
+        profileID: UUID, accountID: String, usage: WeeklyUsage
+    ) {
+        let weeklyReset = usage.resetsAt.timeIntervalSince1970
+        guard weeklyReset.isFinite, weeklyReset >= 1_577_836_800,
+              weeklyReset < 4_102_444_800,
+              (0...100).contains(usage.remainingPercent)
+        else { return }
+
+        let five: Any
+        if let remaining = usage.fiveHourRemainingPercent,
+           let reset = usage.fiveHourResetsAt?.timeIntervalSince1970,
+           reset.isFinite, reset >= 1_577_836_800,
+           reset < 4_102_444_800, (0...100).contains(remaining) {
+            five = [
+                "usedPercent": 100 - remaining,
+                "resetsAt": Int64(reset),
+                "windowDurationMins": 300
+            ] as [String: Any]
+        } else {
+            five = NSNull()
+        }
+        let weekly: [String: Any] = [
+            "usedPercent": 100 - usage.remainingPercent,
+            "resetsAt": Int64(weeklyReset),
+            "windowDurationMins": 10_080
+        ]
+        let raw: [String: Any] = [
+            "accountId": accountID,
+            "ordinaryUsageAllowed": true,
+            "rateLimitsByLimitId": [
+                "codex": [
+                    "planType": NSNull(),
+                    "primary": five,
+                    "secondary": weekly
+                ] as [String: Any]
+            ],
+            "rateLimitResetCredits": [
+                "availableCount": usage.resetCreditsRemaining.map { $0 as Any } ?? NSNull()
+            ]
+        ]
+        let milliseconds = Int64(Date().timeIntervalSince1970 * 1000)
+        send([
+            "kind": "monitorObservation",
+            "profileID": profileID.uuidString.lowercased(),
+            "observedAtMs": milliseconds,
+            "raw": raw
+        ])
     }
 
     private func sendSnapshot() {

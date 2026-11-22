@@ -26,7 +26,7 @@ internal sealed class AdaptiveUsageRefreshService : IDisposable
         this.client = client;
         workDetector = detector ?? new CodexWorkActivityDetector();
         policy = new AdaptiveUsageRefreshPolicy(DateTimeOffset.UtcNow);
-        timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(12) };
+        timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
         timer.Tick += OnTimer;
     }
 

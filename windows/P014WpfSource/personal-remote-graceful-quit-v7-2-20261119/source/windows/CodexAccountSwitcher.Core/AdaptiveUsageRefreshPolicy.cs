@@ -9,7 +9,8 @@ namespace CodexAccountSwitcher.Core;
 /// </summary>
 public sealed class AdaptiveUsageRefreshPolicy
 {
-    public static readonly TimeSpan ActiveInterval = TimeSpan.FromMinutes(1);
+    public static readonly TimeSpan ActiveInterval = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan ResetWatchInterval = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan ResultGrace = TimeSpan.FromSeconds(40);
     public static readonly TimeSpan BaselineInterval = TimeSpan.FromMinutes(5);
 
@@ -36,8 +37,8 @@ public sealed class AdaptiveUsageRefreshPolicy
     public static TimeSpan IntervalForMisses(int misses) => misses switch
     {
         <= 0 => ActiveInterval,
-        1 => TimeSpan.FromMinutes(2),
-        2 => TimeSpan.FromMinutes(4),
+        1 => TimeSpan.FromMinutes(1),
+        2 => TimeSpan.FromMinutes(2),
         _ => BaselineInterval
     };
 
@@ -75,7 +76,11 @@ public sealed class AdaptiveUsageRefreshPolicy
             missedObservations = Math.Min(missedObservations + 1, 3);
         }
 
-        var interval = watchingReset ? ActiveInterval : IntervalForMisses(missedObservations);
+        // After a missing provider observation, preserve exponential backoff
+        // even near reset. Never flood at 15-second intervals on errors.
+        var interval = watchingReset && missedObservations == 0
+            ? ResetWatchInterval
+            : IntervalForMisses(missedObservations);
         DateTimeOffset anchor = baselineAt;
         if (lastFreshAt is DateTimeOffset fresh && fresh > anchor) anchor = fresh;
         if (lastExtraRequestAt is DateTimeOffset extra && extra > anchor) anchor = extra;

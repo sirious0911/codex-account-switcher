@@ -584,18 +584,18 @@ await Test("Windows adaptive quota refresh respects activity reset and account g
     var policy = new AdaptiveUsageRefreshPolicy(start);
     var account = Snapshot(profileId);
     Ensure(!policy.TrySchedule(start, true, account));
-    Ensure(!policy.TrySchedule(start.AddSeconds(59), true, account));
-    Ensure(policy.TrySchedule(start.AddMinutes(1), true, account));
-    Ensure(!policy.TrySchedule(start.AddMinutes(1).AddSeconds(30), true, account));
-    Ensure(!policy.TrySchedule(start.AddMinutes(1).AddSeconds(41), true, account));
+    Ensure(!policy.TrySchedule(start.AddSeconds(29), true, account));
+    Ensure(policy.TrySchedule(start.AddSeconds(30), true, account));
+    Ensure(!policy.TrySchedule(start.AddMinutes(1), true, account));
+    Ensure(!policy.TrySchedule(start.AddMinutes(1).AddSeconds(11), true, account));
     Ensure(policy.ConsecutiveMisses == 1);
-    // Missing provider observation slows reads to the 2-minute interval.
-    Ensure(policy.TrySchedule(start.AddMinutes(3), true, account));
-    policy.Observed(profileId, start.AddMinutes(3).AddSeconds(10),
-        fiveHourNextResetAt: start.AddMinutes(6));
-    // Near reset, allow a 1-minute poll even when no work is active.
-    Ensure(!policy.TrySchedule(start.AddMinutes(3).AddSeconds(30), false, account));
-    Ensure(policy.TrySchedule(start.AddMinutes(4).AddSeconds(11), false, account));
+    // Missing provider observation backs off to 1 minute, not 30 seconds.
+    Ensure(policy.TrySchedule(start.AddMinutes(2), true, account));
+    policy.Observed(profileId, start.AddMinutes(2).AddSeconds(5),
+        fiveHourNextResetAt: start.AddMinutes(5));
+    // Near reset, use 15 seconds even without foreground Codex activity.
+    Ensure(!policy.TrySchedule(start.AddMinutes(2).AddSeconds(19), false, account));
+    Ensure(policy.TrySchedule(start.AddMinutes(2).AddSeconds(21), false, account));
     // Unconfirmed account and account mutation always suppress polling.
     Ensure(!policy.TrySchedule(start.AddMinutes(5), true,
         Snapshot(profileId, mutating: true)));
@@ -603,6 +603,75 @@ await Test("Windows adaptive quota refresh respects activity reset and account g
     Ensure(!policy.TrySchedule(start.AddMinutes(6), false, account));
     Ensure(!policy.TrySchedule(start.AddMinutes(7), true,
         Snapshot(profileId, confirmed: false)));
+    return Task.CompletedTask;
+});
+await Test("Windows quota refresh 30s/15s/backoff and idle guard", () => {
+    Ensure(AdaptiveUsageRefreshPolicy.ActiveInterval == TimeSpan.FromSeconds(30));
+    Ensure(AdaptiveUsageRefreshPolicy.ResetWatchInterval == TimeSpan.FromSeconds(15));
+    Ensure(AdaptiveUsageRefreshPolicy.BaselineInterval == TimeSpan.FromMinutes(5));
+    Ensure(AdaptiveUsageRefreshPolicy.IntervalForMisses(1) == TimeSpan.FromMinutes(1));
+    Ensure(AdaptiveUsageRefreshPolicy.IntervalForMisses(2) == TimeSpan.FromMinutes(2));
+    Ensure(AdaptiveUsageRefreshPolicy.IntervalForMisses(3) == TimeSpan.FromMinutes(5));
+    var now = windowBoundary.AddHours(-1);
+    var p = new AdaptiveUsageRefreshPolicy(now);
+    var confirmed = Snapshot(profileId);
+    Ensure(!p.TrySchedule(now.AddMinutes(10), false, confirmed));
+    // Verified provider reset in one minute arms 15s checks when idle.
+    p.Observed(profileId, now.AddMinutes(10),
+        fiveHourNextResetAt: now.AddMinutes(11));
+    Ensure(!p.TrySchedule(now.AddMinutes(10).AddSeconds(14), false, confirmed));
+    Ensure(p.TrySchedule(now.AddMinutes(10).AddSeconds(15), false, confirmed));
+    Ensure(!p.TrySchedule(now.AddMinutes(10).AddSeconds(45), false, confirmed));
+    Ensure(p.ConsecutiveMisses == 0);
+    Ensure(!p.TrySchedule(now.AddMinutes(10).AddSeconds(56), false, confirmed));
+    Ensure(p.ConsecutiveMisses == 1);
+    Ensure(p.TrySchedule(now.AddMinutes(11).AddSeconds(15), false, confirmed));
+    p.RequestTransportFailed(now.AddMinutes(11).AddSeconds(16));
+    Ensure(p.ConsecutiveMisses == 2);
+    Ensure(!p.TrySchedule(now.AddMinutes(12), false, confirmed));
+    Ensure(p.TrySchedule(now.AddMinutes(13).AddSeconds(15), false, confirmed));
+    return Task.CompletedTask;
+});
+await Test("SwiftHost active-only observation matches strict Windows 5H/7D wire contract", () => {
+    var now = windowBoundary.AddMinutes(-1);
+    var wire = JsonSerializer.Serialize(new {
+        kind = "monitorObservation",
+        profileID = profileId.ToString("D"),
+        observedAtMs = now.ToUnixTimeMilliseconds(),
+        raw = new {
+            accountId = "synthetic-provider-account",
+            ordinaryUsageAllowed = true,
+            rateLimitsByLimitId = new {
+                codex = new {
+                    planType = (string?)null,
+                    primary = new {
+                        usedPercent = 82, resetsAt = windowBoundary.ToUnixTimeSeconds(),
+                        windowDurationMins = 300
+                    },
+                    secondary = new {
+                        usedPercent = 40, resetsAt = weekBoundary.ToUnixTimeSeconds(),
+                        windowDurationMins = 10080
+                    }
+                }
+            },
+            rateLimitResetCredits = new { availableCount = (int?)null }
+        }
+    });
+    var result = SwiftHostStrictEnvelopeV1Review.Inspect(wire);
+    Ensure(result.Status == "OFFLINE_STRICT_WIRE_CANDIDATE_ONLY" &&
+        result.Sample is { ProfileID: var source } &&
+        source == profileId &&
+        result.Sample.ObservedAtMilliseconds == now.ToUnixTimeMilliseconds());
+    Ensure(MonitorSyntheticPreview.TryRead(result.Sample!.RawJson, out var parsed) &&
+        parsed!.FiveHourRemaining == 18 &&
+        parsed.WeeklyRemaining == 60);
+    // Wrong active profile does not authorize publishing a correct-looking
+    // envelope from another account.
+    var gate = new ActiveMonitorPublicationGate();
+    gate.Observe(Snapshot(profileId));
+    Ensure(gate.Allows(result.Sample!));
+    gate.SwitchRequested();
+    Ensure(!gate.Allows(result.Sample!));
     return Task.CompletedTask;
 });
 await Test("Scheduled 5H deadline observed but not emitted early", () => {

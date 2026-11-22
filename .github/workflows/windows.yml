@@ -143,13 +143,23 @@ jobs:
           $preview = Join-Path $env:RUNNER_TEMP ('p020-unsigned-' + [Guid]::NewGuid().ToString('N'))
           ./scripts/p020-source-bound-preview.ps1 -SourceRoot ((Get-Location).Path) -ExpectedCommit $env:GITHUB_SHA -OutputDirectory $preview
           if ($LASTEXITCODE -ne 0) { throw 'P0-20 unsigned candidate gate failed.' }
-          # Only the synthetic 82-case WPF suite is executed; the unsigned
+          # Only the synthetic 83-case WPF suite is executed; the unsigned
           # candidate EXE is never started or uploaded as a release.
           Push-Location windows/P014WpfSource/dedicated-thread-v72-native-20261119
           try {
             dotnet run --project IntegratedChecks/IntegratedChecks.csproj -c Release
             if ($LASTEXITCODE -ne 0) { throw 'P0-20 synthetic WPF checks failed.' }
           } finally { Pop-Location }
+      - name: P0-21 Verify protected trust-source reader (synthetic, no send)
+        shell: pwsh
+        run: |
+          $project = 'windows/CodexAccountSwitcher.TrustSource/CodexAccountSwitcher.TrustSource.csproj'
+          dotnet run --project $project -c Release -- --synthetic-acl-checks
+          if ($LASTEXITCODE -ne 0) { throw 'P0-21 protected trust ACL checks failed.' }
+          dotnet run --project $project -c Release -- --synthetic-relative-head-checks
+          if ($LASTEXITCODE -ne 0) { throw 'P0-21 handle-relative HEAD checks failed.' }
+          # No administrator policy registration, signed HEAD installation,
+          # account access or Owner/Sender messaging is performed.
       - name: Upload isolated native SwiftHost runtime
         uses: actions/upload-artifact@v4
         with:

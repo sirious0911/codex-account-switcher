@@ -28,6 +28,14 @@
     <Compile Include="CodexDueIpcEnrollment.cs" />
     <Compile Include="CodexWindowsOwnerAutoStart.cs" />
     <Compile Include="WindowsOwnerReadOnlyAdmission.cs" />
+    <!-- P0-15: OS-protected public trust-source read-only observation.
+         These files NEVER grant Owner admission or send permission. -->
+    <Compile Include="../../CodexAccountSwitcher.TrustSource/WindowsP015AclPolicy.cs"
+             Link="WindowsP015AclPolicy.cs" />
+    <Compile Include="../../CodexAccountSwitcher.TrustSource/WindowsP015AdminTrustSource.cs"
+             Link="WindowsP015AdminTrustSource.cs" />
+    <Compile Include="../../CodexAccountSwitcher.TrustSource/WindowsP015RelativeHeadReader.cs"
+             Link="WindowsP015RelativeHeadReader.cs" />
     <Compile Include="WindowsAdmissionFileEvidence.cs" />
     <Compile Include="WindowsAdmissionRelativeReader.cs" />
     <Compile Include="WindowsAdmissionFixtureFlow.cs" />

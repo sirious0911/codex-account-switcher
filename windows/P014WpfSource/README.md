@@ -229,3 +229,45 @@ independent publisher signing, admin-protected P0-15 trust keys, a true
 operator-approved monotonically protected floor, Owner/Sender permission,
 or actual automatic message authorization. The installed Windows V7.2
 and all send preferences remain unchanged.
+
+
+## P0-21: Read-only P0-15 Windows trust observation in the staged WPF candidate
+
+The staged P0-18 WPF source now links the existing **Windows OS-protected
+P0-15 trust-source reader** through the same checked native C# modules as
+`windows/CodexAccountSwitcher.TrustSource`. At candidate startup, after
+the single-instance mutex is obtained, it logs a **fixed HOLD status only**,
+using the read-only `WindowsOwnerReadOnlyAdmission.ProtectedTrustSourceStatus()`.
+
+This observation uses the fixed 64-bit HKLM OwnerTrustV1 key and handle-
+relative ProgramData HEAD path. The existing reader verifies Windows owner
+and protected DACL conditions, but it **does not verify Ed25519 signatures**,
+P0-12 enrollment, the independently protected rollback-floor history,
+CurrentUser DPAPI, exclusive Sender ownership or active-profile admission.
+Even when protected public inputs are present, the status is
+`HOLD_OWNER_SIGNED_HEAD_AND_ENROLLMENT_NOT_ADMITTED`; missing inputs
+retain the underlying `HOLD_P015_...` error. The owner/due dispatch
+`HoldReason` and `IsReady` remain **unchanged unconditional HOLD**.
+No private keys, email, thread identifiers, tokens or HEAD bytes are logged.
+
+The WPF candidate links three existing code files from
+`windows/CodexAccountSwitcher.TrustSource/`: ACL policy, read-only
+admin trust source and handle-relative HEAD reader. **Any future clean
+CI branch of this candidate must include these files and the already
+bundled `WindowsAdmissionFileEvidence.cs`.** P0-20 Draft PR #2 does
+not include the P0-21 changes and is not modified by this local source
+development. P0-21 must receive its own scoped source review.
+
+The WPF `IntegratedChecks` suite now includes a read-only P0-15
+observation test and an in-memory *inputs present* fixture proving this
+can never enable Owner; no actual administrator policy registration occurs.
+The currently installed Windows V7.2 has no P0-18 active-proof endpoint.
+The staged P0-21 status observation is not installed in V7.2.
+
+```powershell
+cd windows/P014WpfSource/dedicated-thread-v72-native-20261119
+dotnet run --project IntegratedChecks/IntegratedChecks.csproj -c Release
+```
+
+This source-only integration is **not** an operating trust-store bootstrap
+or a production release. Master/5H/7D greetings and actual sending remain OFF.

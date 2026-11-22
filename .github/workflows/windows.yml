@@ -171,10 +171,26 @@ jobs:
             [Text.UTF8Encoding]::new($false))
           # Synthetic WPF integration remains required. This unsigned
           # executable is a non-release review candidate, never installed.
+          # A new command must be exercised in the freshly compiled Windows
+          # SwiftHost itself, not inferred from a previously built donor zip
+          # or from the C# offline synthetic envelope checks alone.
+          $nativeBin = swift build -c release --show-bin-path
+          if ($LASTEXITCODE -ne 0) { throw 'HOLD_FRESH_SWIFTHOST_BIN_PATH' }
+          $nativeHost = Join-Path $nativeBin.Trim() 'SwitcherHost.exe'
+          if (-not (Test-Path -LiteralPath $nativeHost -PathType Leaf)) {
+            throw 'HOLD_FRESH_SWIFTHOST_EXE_NOT_FOUND'
+          }
           Push-Location windows/P014WpfSource/dedicated-thread-v72-native-20261119
           try {
             dotnet run --project IntegratedChecks/IntegratedChecks.csproj -c Release
             if ($LASTEXITCODE -ne 0) { throw 'P0-20 synthetic WPF checks failed.' }
+            # Temp-only synthetic auth + local fake Codex CLI. Prove both
+            # 5H and 7D observations from TWO real native refreshActive reads.
+            # On any missing/invalid response, fail CI before artifact upload.
+            dotnet run --project IntegratedChecks/IntegratedChecks.csproj -c Release -- --native-swift-host-refresh-no-send $nativeHost
+            if ($LASTEXITCODE -ne 0) {
+              throw 'HOLD_FRESH_WINDOWS_SWIFTHOST_ACTIVE_QUOTA_IPC'
+            }
           } finally { Pop-Location }
       - name: P0-21 Verify protected trust-source reader (synthetic, no send)
         shell: pwsh

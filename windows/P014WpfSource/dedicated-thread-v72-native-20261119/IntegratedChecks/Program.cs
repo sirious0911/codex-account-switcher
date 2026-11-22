@@ -11,6 +11,12 @@ using System.Windows.Threading;
 using System.IO.Pipes;
 using System.Text;
 
+// Real native SwiftHost must use isolated fake Codex CLI and temp identities.
+if (args.Length == 1 && args[0] == "app-server")
+    return await NativeSwiftHostRefreshSmoke.FakeCodexRpcAsync();
+if (args.Length == 2 && args[0] == "--native-swift-host-refresh-no-send")
+    return await NativeSwiftHostRefreshSmoke.RunAsync(args[1]);
+
 int passed = 0, failed = 0;
 async Task Test(string title, Func<Task> action)
 {
@@ -1717,6 +1723,7 @@ await Test("Central reservation is never a turn/start authorization", () => {
 });
 Console.WriteLine($"RESULT PASS={passed} FAIL={failed}");
 Environment.ExitCode = failed == 0 ? 0 : 1;
+return Environment.ExitCode;
 
 sealed class FakeAccountClient : IAccountClient
 {

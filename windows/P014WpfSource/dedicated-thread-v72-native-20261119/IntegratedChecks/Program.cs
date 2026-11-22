@@ -330,6 +330,63 @@ CodexMonitorWireSample WindowSample(DateTimeOffset seen, DateTimeOffset fiveAt,
     gate.Observe(snapshot);
     return (new DedicatedResetDeadlineObserver(),gate,snapshot);
 }
+await Test("5H pre-reset 0% evidence selects Alert Bot only in dry-run", () => {
+    FiveHour100Alert Observe(double usedBefore, double minutesBefore)
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "codex-step3a-" +
+            Guid.NewGuid().ToString("N"));
+        try
+        {
+            var worker = new FiveHour100RecoveryWorker(tmp);
+            var (watch, gate, account) = NewWatcher();
+            var before = windowBoundary.AddMinutes(-minutesBefore);
+            Ensure(worker.Process(WindowSample(before, windowBoundary, weekBoundary,
+                usedBefore), account, gate, before).Count == 0);
+            var after = windowBoundary.AddMinutes(1);
+            var alerts = worker.Process(WindowSample(after,
+                windowBoundary.AddMinutes(300), weekBoundary, used: 2),
+                account, gate, after);
+            Ensure(alerts.Count == 1);
+            return worker.ReadMockOutbox().Single();
+        }
+        finally
+        {
+            if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true);
+        }
+    }
+    var zero = Observe(100, 2);
+    Ensure(zero.PreResetRemainingPercent == 0 &&
+        zero.PreResetObservedAt == windowBoundary.AddMinutes(-2) &&
+        zero.PreResetWindowEndsAt == windowBoundary &&
+        QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(zero) ==
+            QuotaTelegramBot.AlertImportant);
+    // The existing production 5H monitor sender is unchanged and not armed.
+    Ensure(QuotaTelegramBotRouting.ForFiveHour(zero)?.Destination ==
+        QuotaTelegramBot.MonitorMuted);
+    var nonZero = Observe(99, 2);
+    Ensure(nonZero.PreResetRemainingPercent == 1 &&
+        QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(nonZero) ==
+            QuotaTelegramBot.MonitorMuted);
+    var stale = Observe(100, 30);
+    Ensure(stale.PreResetRemainingPercent is null &&
+        QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(stale) ==
+            QuotaTelegramBot.MonitorMuted);
+    // Observation precisely on a reset boundary does not prove the
+    // immediately preceding quota window.
+    var boundary = zero with { PreResetObservedAt = windowBoundary };
+    Ensure(QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(boundary) ==
+        QuotaTelegramBot.MonitorMuted);
+    var legacy = zero with {
+        PreResetRemainingPercent = null,
+        PreResetObservedAt = null, PreResetWindowEndsAt = null
+    };
+    Ensure(QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(legacy) ==
+        QuotaTelegramBot.MonitorMuted);
+    var invalid = zero with { PreResetObservedAt = windowBoundary.AddMinutes(1) };
+    Ensure(QuotaTelegramBotRouting.PreviewFiveHourZeroDestination(invalid) ==
+        QuotaTelegramBot.MonitorMuted);
+    return Task.CompletedTask;
+});
 await Test("Scheduled 5H deadline observed but not emitted early", () => {
     var (watch,gate,account) = NewWatcher();
     var seen=windowBoundary.AddMinutes(-2);

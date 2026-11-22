@@ -18,6 +18,20 @@ public static class QuotaTelegramBotRouting
                 FormatFiveHour(alert))
             : null;
 
+    // STEP3-A planning only: the existing 5H sender remains MonitorMuted.
+    // An important 5H alert needs a separately reviewed script, receipt
+    // contract and one-message user approval before live routing.
+    // No URI, token, script path or automatic sender is returned here.
+    public static QuotaTelegramBot? PreviewFiveHourZeroDestination(
+        FiveHour100Alert? alert) =>
+        alert is { Kind: "FIVE_HOUR_100_RECOVERED", Lane: "fiveHour",
+            RemainingPercent: 100, Status: "MOCK_PENDING" or "MOCK_RESERVED" } &&
+        IsEventKey(alert.Key)
+            ? FiveHourPreResetEvidence.IsVerifiedZero(alert)
+                ? QuotaTelegramBot.AlertImportant
+                : QuotaTelegramBot.MonitorMuted
+            : null;
+
     public static QuotaTelegramRoute? ForWeekly(Weekly100Alert? alert) =>
         alert is { Kind: "WEEKLY_100_RECOVERED", Lane: "week",
             RemainingPercent: 100, Status: "MOCK_PENDING" or "MOCK_RESERVED" } && IsEventKey(alert.Key)

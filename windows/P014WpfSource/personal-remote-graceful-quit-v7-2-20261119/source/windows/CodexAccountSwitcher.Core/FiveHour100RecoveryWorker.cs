@@ -100,6 +100,7 @@ public sealed class FiveHour100RecoveryWorker
                 return [];
             }
 
+            var lastPreResetAtMs = existing.LatestAtMs;
             existing.LatestAtMs = observedMs;
             var oldResetAtMs = existing.BaselineResetAtMs;
             var newCycleMs = resetAtMs - oldResetAtMs;
@@ -144,6 +145,27 @@ public sealed class FiveHour100RecoveryWorker
                 var key = TelegramQuotaEventIdentity.Build(
                     TelegramNotificationLane.FiveHourRecovery,
                     accountHash, beforeReset, resetAtMs);
+                // The previous trusted sample belongs to the immediately
+                // ending window. A 100%-used sample is not evidence for an
+                // urgent 0%-remaining alert unless it was observed shortly
+                // BEFORE that exact boundary and the new provider window is
+                // confirmed at/after the boundary with the same identity.
+                // Deferred rollover from older schema carries no such proof.
+                var lastPreResetAt = lastPreResetAtMs;
+                var preResetTrusted = !deferredCycle &&
+                    lastPreResetAt > 0 &&
+                    lastPreResetAt < oldResetAtMs &&
+                    oldResetAtMs - lastPreResetAt <= TimeSpan.FromMinutes(15).TotalMilliseconds &&
+                    observedMs >= oldResetAtMs &&
+                    newCycleMs >= TimeSpan.FromMinutes(270).TotalMilliseconds &&
+                    newCycleMs <= TimeSpan.FromMinutes(345).TotalMilliseconds;
+                var evidenceRemaining = preResetTrusted ? 100 - existing.BaselineUsed : (double?)null;
+                var evidenceObservedAt = preResetTrusted
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(lastPreResetAt)
+                    : (DateTimeOffset?)null;
+                var evidenceWindowEnd = preResetTrusted
+                    ? DateTimeOffset.FromUnixTimeMilliseconds(oldResetAtMs)
+                    : (DateTimeOffset?)null;
                 FiveHour100Alert? created = null;
                 if (state.EmittedKeys.Add(key))
                 {
@@ -153,7 +175,10 @@ public sealed class FiveHour100RecoveryWorker
                     created = new FiveHour100Alert(key, "FIVE_HOUR_100_RECOVERED",
                         "fiveHour", 100,
                         observedAt, DateTimeOffset.FromUnixTimeMilliseconds(resetAtMs),
-                        "MOCK_PENDING", ObservedRemainingPercent: 100 - used);
+                        "MOCK_PENDING", ObservedRemainingPercent: 100 - used,
+                        PreResetRemainingPercent: evidenceRemaining,
+                        PreResetObservedAt: evidenceObservedAt,
+                        PreResetWindowEndsAt: evidenceWindowEnd);
                     state.Outbox.Add(created);
                 }
                 existing.BaselineUsed = used;
@@ -265,6 +290,7 @@ public sealed class FiveHour100RecoveryWorker
                 e.Lane != "fiveHour" || e.RemainingPercent != 100 ||
                 (e.ObservedRemainingPercent is double remaining &&
                     (!double.IsFinite(remaining) || remaining < 0 || remaining > 100)) ||
+                !FiveHourPreResetEvidence.IsValidOrMissing(e) ||
                 e.Status is not ("MOCK_PENDING" or "MOCK_RESERVED" or
                     "MOCK_COMPLETE" or "MOCK_UNCERTAIN") ||
                 (e.Status != "MOCK_PENDING" && e.MockOwner != "MOCK_WINDOWS")) ||
@@ -325,4 +351,10 @@ public sealed record FiveHour100Alert(
     // Actual remaining quota when the reset was observed. Null for
     // older persisted events; legacy RemainingPercent=100 identifies
     // reset-confirmation event and is NOT the observed quota balance.
-    double? ObservedRemainingPercent = null);
+    double? ObservedRemainingPercent = null,
+    // Nullable on old event ledgers or when the previous sample was stale.
+    // The three fields are always stored together after the provider has
+    // rolled over; none is a permission to send a Telegram message.
+    double? PreResetRemainingPercent = null,
+    DateTimeOffset? PreResetObservedAt = null,
+    DateTimeOffset? PreResetWindowEndsAt = null);

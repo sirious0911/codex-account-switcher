@@ -177,8 +177,24 @@ public partial class App : Application
         }
         if (e.Args.Contains("--self-test")) { await SelfTestAsync(); return; }
         try {
+            var personalHome = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Codex Account Switcher Personal");
             var dataPath = Environment.GetEnvironmentVariable("CODEX_SWITCHER_DATA_HOME")
-                ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Codex Account Switcher Personal");
+                ?? personalHome;
+            // A caller must not bypass the V7.2 single-instance boundary by
+            // specifying an alternate data directory while an operator session
+            // owns the real taskbar. This holds before file/IPC startup.
+            if (basicViewerNoSend &&
+                !string.Equals(Path.GetFullPath(dataPath).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    Path.GetFullPath(personalHome).TrimEnd(
+                    Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                Shutdown(19);
+                return;
+            }
             // Must be known BEFORE client.InitializeAsync may publish a due
             // observation; otherwise startup could consume a reset before
             // the separately enrolled owner has started.
@@ -196,7 +212,14 @@ public partial class App : Application
             var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(dataPath).ToUpperInvariant())));
             instance = new Mutex(true, @"Local\CodexAccountSwitcher-" + key, out ownsMutex);
             activateWindow = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CodexAccountSwitcher-Activate-" + key);
-            if (!ownsMutex) { activateWindow.Set(); Shutdown(); return; }
+            if (!ownsMutex)
+            {
+                // A parallel read-only viewer is not a reason to awaken or
+                // affect the already-running V7.2 operator session.
+                if (!basicViewerNoSend) activateWindow.Set();
+                Shutdown(basicViewerNoSend ? 18 : 0);
+                return;
+            }
             // P0-15: read only the separately protected Windows trust-source
             // presence. This is an observable HOLD status, never a send gate
             // or proof of dual-signed HEAD/registration admission.
@@ -218,8 +241,9 @@ public partial class App : Application
             // Reuse trusted active-monitor due events in one product path.
             // No sender enrollment, transport, or automatic Codex turn exists
             // in the currently installed app or this staged candidate.
-            var codexDueIdentity = new PersonalExistingThreadContext(client,dataPath);
             if (!basicViewerNoSend)
+            {
+                var codexDueIdentity = new PersonalExistingThreadContext(client,dataPath);
                 codexDueDispatcher = new CodexDueDispatchBridge(
                     codexDueIdentity.CurrentIdentity,
                     binding => resetAutoDraftStore!.ReadFor(binding),
@@ -228,6 +252,7 @@ public partial class App : Application
                     sendThroughAuthority: (due,binding,ct) =>
                         CodexDueIpcEnrollment.DeliverAsync(
                             dataPath,due,binding,ct));
+            }
             // Default OFF: App() and App(bool) do not supply an enrollment.
             // Only an explicit internal synthetic test constructor creates a
             // V2 sender. Never read credentials or transmit in normal startup.
@@ -336,15 +361,18 @@ public partial class App : Application
             }
             if (!basicViewerNoSend)
                 TryRestoreWindowsOnlyTelegramConsent();
-            remoteQuitChannel = new RemoteGracefulQuitChannel(dataPath,
-                Dispatcher, RemoteQuitReady, RemoteQuitReserve,
-                () => remoteQuitPending = false,
-                () => _ = QuitAsync());
-            remoteQuitChannel.Start();
+            if (!basicViewerNoSend)
+            {
+                remoteQuitChannel = new RemoteGracefulQuitChannel(dataPath,
+                    Dispatcher, RemoteQuitReady, RemoteQuitReserve,
+                    () => remoteQuitPending = false,
+                    () => _ = QuitAsync());
+                remoteQuitChannel.Start();
+            }
             // Snapshot proof is served from the live WPF dispatcher.
             // Reuse the existing binding in read-only mode; never migrate,
             // update approval flags, start Owner, or send a greeting.
-            try {
+            if (!basicViewerNoSend) try {
                 activeProofChannel = new SwitcherActiveProfileReadOnlyChannel(
                     dataPath, Dispatcher, () => client?.State,
                     () => externalMonitorGate.ActiveProfile,

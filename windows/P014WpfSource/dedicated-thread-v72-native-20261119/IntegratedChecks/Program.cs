@@ -674,19 +674,20 @@ await Test("SwiftHost active-only observation matches strict Windows 5H/7D wire 
     Ensure(!gate.Allows(result.Sample!));
     return Task.CompletedTask;
 });
-await Test("Swift 6.2 emitted JSON parses as strict Windows active quota observation", () => {
-    // Fixture emitted by a Swift 6.2 independently typed implementation
-    // of the new Host.sendActiveQuotaObservation conversion.
-    // Not a claim that the entire Windows SwiftHost executable was compiled.
+await Test("Full Swift 6 compiled SwiftHost monitor sample passes strict Windows validator", () => {
+    // Actual stdout monitorObservation from full Linux SwiftHost built
+    // under Swift 6.2 strict mode, using an isolated fake Codex App Server.
+    // No live account, credentials, real Codex API or Sender transport used.
     const string json = """
-    {"kind":"monitorObservation","observedAtMs":1795375798038,"profileID":"11111111-1111-4111-8111-111111111111","raw":{"accountId":"test-account","ordinaryUsageAllowed":null,"rateLimitResetCredits":{"availableCount":2},"rateLimitsByLimitId":{"codex":{"planType":null,"primary":{"resetsAt":1795382798,"usedPercent":50,"windowDurationMins":300},"secondary":{"resetsAt":1795475798,"usedPercent":70,"windowDurationMins":10080}}}}}
+    {"kind":"monitorObservation","observedAtMs":1795377234788,"profileID":"2b1e8044-6868-41bf-a6b8-4131d776a6f6","raw":{"accountId":"synthetic-test-provider","rateLimitsByLimitId":{"codex":{"primary":{"windowDurationMins":300,"resetsAt":1795380834,"usedPercent":67},"planType":null,"secondary":{"windowDurationMins":10080,"resetsAt":1795463634,"usedPercent":43}}},"ordinaryUsageAllowed":null,"rateLimitResetCredits":{"availableCount":2}}}
     """;
     var inspected = SwiftHostStrictEnvelopeV1Review.Inspect(json);
     Ensure(inspected.Status == "OFFLINE_STRICT_WIRE_CANDIDATE_ONLY" &&
-        inspected.Sample?.ProfileID == profileId);
+        inspected.Sample?.ProfileID ==
+            Guid.Parse("2b1e8044-6868-41bf-a6b8-4131d776a6f6"));
     Ensure(MonitorSyntheticPreview.TryRead(inspected.Sample!.RawJson, out var quotas) &&
-        quotas!.FiveHourRemaining == 50 &&
-        quotas.WeeklyRemaining == 30 &&
+        quotas!.FiveHourRemaining == 33 &&
+        quotas.WeeklyRemaining == 57 &&
         quotas.CreditsRemaining == 2 &&
         quotas.OrdinaryUsageAllowed is null);
     return Task.CompletedTask;

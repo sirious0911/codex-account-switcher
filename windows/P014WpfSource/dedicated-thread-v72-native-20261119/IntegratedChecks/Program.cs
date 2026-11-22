@@ -640,6 +640,26 @@ await Test("Windows quota refresh 30s/15s/backoff and idle guard", () => {
     Ensure(p.TrySchedule(now.AddMinutes(13).AddSeconds(15), false, confirmed));
     return Task.CompletedTask;
 });
+await Test("Idle startup trusted 300s baseline immediately seeds 15s reset-watch", () => {
+    var boot = windowBoundary.AddMinutes(-2);
+    var p = new AdaptiveUsageRefreshPolicy(boot);
+    var active = Snapshot(profileId);
+    Ensure(!p.TrySchedule(boot, false, active));
+    Ensure(!p.TrySchedule(boot.AddSeconds(30), false, active));
+    var fresh = boot.AddSeconds(40);
+    p.Observed(profileId, fresh, fiveHourNextResetAt: fresh.AddMinutes(1));
+    Ensure(!p.TrySchedule(fresh.AddSeconds(14), false, active));
+    Ensure(p.TrySchedule(fresh.AddSeconds(15), false, active));
+    p.Observed(profileId, fresh.AddSeconds(16),
+        fiveHourNextResetAt: fresh.AddMinutes(1));
+    Ensure(!p.TrySchedule(fresh.AddSeconds(30), false, active));
+    Ensure(p.TrySchedule(fresh.AddSeconds(31), false, active));
+    var other = Guid.NewGuid();
+    Ensure(!p.TrySchedule(fresh.AddSeconds(32), false, Snapshot(other)));
+    Ensure(p.ActiveProfile == other);
+    Ensure(!p.TrySchedule(fresh.AddSeconds(48), false, Snapshot(other)));
+    return Task.CompletedTask;
+});
 await Test("SwiftHost active-only observation matches strict Windows 5H/7D wire contract", () => {
     var now = windowBoundary.AddMinutes(-1);
     var wire = JsonSerializer.Serialize(new {

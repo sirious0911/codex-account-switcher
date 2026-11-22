@@ -8,6 +8,9 @@ private enum UsageRefreshResult: Sendable {
 @MainActor
 open class AccountController {
     public var onChange: (@MainActor () -> Void)?
+    /// Only a real, just-completed provider read may bootstrap the idle
+    /// 5H/7D reset watcher. Never reuse a cached/stale UsageViewState.
+    public var onFreshVerifiedActiveQuota: (@MainActor (UUID, String, WeeklyUsage) -> Void)?
     public private(set) var accounts: [AccountProfile] = [] { didSet { onChange?() } }
     public private(set) var activeAccountID: UUID? { didSet { onChange?() } }
     public private(set) var usageStates: [UUID: UsageViewState] = [:] { didSet { onChange?() } }
@@ -210,6 +213,23 @@ open class AccountController {
                         showError(error)
                     }
                     await observeResetExpiry(profile: account, usage: usage)
+                    // The regular 300-second poll is the source of truth at
+                    // idle startup. Publish only the freshly returned ACTIVE
+                    // provider usage after exact read-only credential proof.
+                    // No extra API request or cached observation is involved.
+                    if !Task.isCancelled, !isMutating, !isAddingAccount,
+                       activeIdentityConfirmed, activeAccountID == id,
+                       let providerID = account.accountID,
+                       !providerID.isEmpty, providerID.utf8.count <= 256,
+                       !providerID.unicodeScalars.contains(where: {
+                           CharacterSet.controlCharacters.contains($0)
+                       }),
+                       let proof = try? await store.verifiedActiveQuotaProfile(),
+                       proof.id == id, proof.accountID == providerID,
+                       !Task.isCancelled, !isMutating, !isAddingAccount,
+                       activeIdentityConfirmed, activeAccountID == id {
+                        onFreshVerifiedActiveQuota?(id, providerID, usage)
+                    }
                 case let .failure(id, message):
                     guard let account = accounts.first(where: { $0.id == id }) else { continue }
                     await observeResetExpiry(profile: account, usage: nil, error: message)

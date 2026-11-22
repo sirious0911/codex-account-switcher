@@ -131,6 +131,60 @@ struct AccountControllerTests {
         #expect(try await fixture.store.loadUsageCache().entries.first?.usage.remainingPercent == 72)
     }
 
+    @Test func freshBackgroundActiveQuotaEmitsOnceWithoutExtraProviderRead() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        let active = try #require(fixture.model.activeAccountID)
+        var received: [(UUID, String, WeeklyUsage)] = []
+        fixture.model.onFreshVerifiedActiveQuota = { id, account, quota in
+            received.append((id, account, quota))
+        }
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(received.count == 1)
+        #expect(received.first?.0 == active)
+        #expect(received.first?.1 == "demo-account")
+        #expect(received.first?.2.remainingPercent == 72)
+        #expect(await fixture.client.activeQuotaReadCount == 1)
+    }
+
+    @Test func cachedStartupNeverEmitsFreshActiveQuotaUntilNewProviderRead() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        let controller = AccountController(
+            store: fixture.store, codex: fixture.client,
+            switchService: SwitchService(desktop: FixtureDesktop(),
+                store: fixture.store, codex: fixture.client))
+        var published = 0
+        controller.onFreshVerifiedActiveQuota = { _, _, _ in published += 1 }
+        await controller.start() // loads the *cache*, not a provider response
+        #expect(published == 0)
+        controller.refreshWeeklyUsage()
+        await controller.waitForWeeklyUsageRefresh()
+        #expect(published == 1)
+        #expect(await fixture.client.activeQuotaReadCount == 2)
+    }
+
+    @Test func mismatchedActiveCredentialCannotSeedIdleResetWatch() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        var published = 0
+        fixture.model.onFreshVerifiedActiveQuota = { _, _, _ in published += 1 }
+        let bad = Data(#"{"tokens":{"account_id":"other-provider"}}"#.utf8)
+        try bad.write(to: fixture.active.appendingPathComponent("auth.json"))
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(published == 0)
+    }
+
     @Test func verifiedActiveOnlyQuotaDoesNotChangeAccountOrCredential() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }

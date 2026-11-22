@@ -78,6 +78,13 @@ private final class Host {
                 switchService: SwitchService(desktop: DesktopAdapter(host: self), store: store, codex: CredentialIdentity()))
             controller = model
             model.onChange = { [weak self] in self?.sendSnapshot() }
+            // Send the first *fresh provider* quota from the already-running
+            // 300-second background refresh. This seeds idle near-reset
+            // watching without another request or a stale cache replay.
+            model.onFreshVerifiedActiveQuota = { [weak self] id, accountID, usage in
+                self?.sendActiveQuotaObservation(
+                    profileID: id, accountID: accountID, usage: usage)
+            }
             await model.startBackgroundUsageRefresh()
             sendSnapshot()
             return

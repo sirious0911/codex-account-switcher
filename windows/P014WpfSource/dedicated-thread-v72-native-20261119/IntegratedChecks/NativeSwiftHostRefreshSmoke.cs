@@ -130,12 +130,32 @@ internal static class NativeSwiftHostRefreshSmoke
                 client.State.ActiveAccountID.HasValue,
                 TimeSpan.FromSeconds(12));
             var selected = client.State.ActiveAccountID!.Value;
+            // Provider's first 300-second refresh must publish its fresh
+            // active-account observation before any explicit refreshActive.
+            stage = "INITIAL_BASELINE_OBSERVATION";
+            await UntilAsync(() => !observations.IsEmpty, TimeSpan.FromSeconds(18));
+            if (!observations.TryDequeue(out var baseline) ||
+                baseline.ProfileID != selected ||
+                !MonitorSyntheticPreview.TryRead(baseline.RawJson, out var baselineQuota) ||
+                baselineQuota?.FiveHourRemaining != 33 ||
+                baselineQuota.WeeklyRemaining != 57 ||
+                baselineQuota.CreditsRemaining != 2 ||
+                baselineQuota.OrdinaryUsageAllowed is not null)
+                throw new InvalidOperationException("Missing fresh idle startup quota.");
+
+            var initialLag = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+                - baseline.ObservedAtMilliseconds;
+            if (initialLag < -30000 || initialLag > 120000)
+                throw new InvalidOperationException("Startup quota is stale.");
+            if (await File.ReadAllTextAsync(authFile) != auth)
+                throw new InvalidOperationException("Synthetic credential changed.");
+
+            // Initial provider read can still be unwinding. Retry against
+            // the synthetic-only CLI, never a real Codex installation.
             stage = "FIRST_ACTIVE_REFRESH";
-            // Initial all-profile background fetch can overlap the first
-            // probe. Retry only against the isolated synthetic CLI if Swift
-            // correctly deferred an overlapping active read.
             for (int attempt = 0; attempt < 3 && observations.IsEmpty; attempt++)
             {
+                await Task.Delay(120);
                 await client.CommandAsync("refreshActive").WaitAsync(TimeSpan.FromSeconds(25));
                 if (observations.IsEmpty) await Task.Delay(900);
             }
@@ -143,24 +163,14 @@ internal static class NativeSwiftHostRefreshSmoke
 
             if (!observations.TryDequeue(out var sample) ||
                 sample.ProfileID != selected ||
+                sample.ObservedAtMilliseconds <= baseline.ObservedAtMilliseconds ||
                 !MonitorSyntheticPreview.TryRead(sample.RawJson, out var quota) ||
-                quota is null ||
-                quota.FiveHourRemaining != 33 || quota.WeeklyRemaining != 57 ||
-                quota.CreditsRemaining != 2 ||
+                quota?.FiveHourRemaining != 33 ||
+                quota.WeeklyRemaining != 57 || quota.CreditsRemaining != 2 ||
                 quota.OrdinaryUsageAllowed is not null)
-                throw new InvalidOperationException("Swift host did not publish exact synthetic 5H/7D quota.");
-
-            var delta = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
-                - sample.ObservedAtMilliseconds;
-            if (delta < -30000 || delta > 120000)
-                throw new InvalidOperationException("Observation timestamp not fresh.");
-            if (await File.ReadAllTextAsync(authFile) != auth)
-                throw new InvalidOperationException("Synthetic active credential changed.");
-
-            // Drain any responses from initial overlap retries. The
-            // second command must produce its OWN later observation.
+                throw new InvalidOperationException("First active quota missing.");
             while (observations.TryDequeue(out _)) { }
-            await Task.Delay(60);
+            await Task.Delay(80);
             stage = "SECOND_ACTIVE_REFRESH";
             await client.CommandAsync("refreshActive").WaitAsync(TimeSpan.FromSeconds(25));
             await UntilAsync(() => !observations.IsEmpty, TimeSpan.FromSeconds(8));
@@ -170,9 +180,9 @@ internal static class NativeSwiftHostRefreshSmoke
                 !MonitorSyntheticPreview.TryRead(second.RawJson, out var secondQuota) ||
                 secondQuota?.FiveHourRemaining != 33 ||
                 secondQuota.WeeklyRemaining != 57)
-                throw new InvalidOperationException("Repeated Swift host active refresh failed.");
+                throw new InvalidOperationException("Second active quota missing.");
 
-            Console.WriteLine("PASS: fresh Windows SwiftHost.exe emits two strict active-only synthetic monitor observations; no send.");
+            Console.WriteLine("PASS: fresh Windows SwiftHost.exe emits first idle 300s baseline plus two strict active-only synthetic monitor observations; no send.");
             return 0;
         }
         catch (Exception ex)

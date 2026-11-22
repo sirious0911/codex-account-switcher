@@ -10,6 +10,29 @@ namespace CodexAccountSwitcher.Core;
 /// </summary>
 public static class WindowsExistingAmanoBotRoute
 {
+    // STEP3-A FUTURE-only sender selection. The file SHA and existing Alert
+    // Bot config must be present before even constructing a command preview.
+    // This function has no process/network/DPAPI reads and cannot arm delivery.
+    public static WindowsExistingAmanoBotInvocation? PrepareFiveHourZero(
+        string? bundledHostPath,
+        string? existingAmanoBotDirectory,
+        FiveHour100Alert? alert)
+    {
+        var route = QuotaTelegramBotRouting.ForFiveHourZeroEscalation(alert);
+        if (route is null || string.IsNullOrWhiteSpace(bundledHostPath) ||
+            string.IsNullOrWhiteSpace(existingAmanoBotDirectory))
+            return null;
+        var packaged = WindowsPackagedTelegramScripts.Inspect(bundledHostPath);
+        if (!packaged.FiveHourZeroAlertVerified) return null;
+        var bots = TelegramBotFileStatus.Inspect(existingAmanoBotDirectory);
+        if (!bots.AlertBotFilesPresent || !bots.ChatDestinationPresent) return null;
+        var script = Path.Combine(Path.GetDirectoryName(bundledHostPath)!,
+            WindowsPackagedTelegramScripts.FiveHourZeroAlertScriptName);
+        return new WindowsExistingAmanoBotInvocation(
+            script, existingAmanoBotDirectory, alert!.Key, route.Text,
+            Silent: false);
+    }
+
     public static WindowsExistingAmanoBotInvocation? Prepare(
         string? bundledHostPath,
         string? existingAmanoBotDirectory,

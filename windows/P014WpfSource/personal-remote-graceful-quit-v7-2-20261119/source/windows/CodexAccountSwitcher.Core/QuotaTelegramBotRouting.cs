@@ -32,6 +32,27 @@ public static class QuotaTelegramBotRouting
                 : QuotaTelegramBot.MonitorMuted
             : null;
 
+    // Future, OFFLINE-ONLY 5H urgent Alert Bot route, not the active 5H
+    // monitor sender. Exact validated pre-reset 0% evidence is required.
+    // Selecting a route is never authorization to deliver it.
+    public static QuotaTelegramRoute? ForFiveHourZeroEscalation(
+        FiveHour100Alert? alert) =>
+        PreviewFiveHourZeroDestination(alert) == QuotaTelegramBot.AlertImportant
+            ? new QuotaTelegramRoute(
+                QuotaTelegramBot.AlertImportant,
+                "telegram-token.dpapi",
+                "telegram-chat-id.txt",
+                WindowsPackagedTelegramScripts.FiveHourZeroAlertScriptName,
+                FormatFiveHourZero(alert!))
+            : null;
+
+    private static string FormatFiveHourZero(FiveHour100Alert alert)
+    {
+        var observed = alert.ObservedAt.ToOffset(TimeSpan.FromHours(9))
+            .ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        return $"Codex 5시간 한도 초기화 확인 (직전 잔여 0%, 관측 {observed} KST)";
+    }
+
     public static QuotaTelegramRoute? ForWeekly(Weekly100Alert? alert) =>
         alert is { Kind: "WEEKLY_100_RECOVERED", Lane: "week",
             RemainingPercent: 100, Status: "MOCK_PENDING" or "MOCK_RESERVED" } && IsEventKey(alert.Key)

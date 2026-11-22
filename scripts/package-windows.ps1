@@ -41,6 +41,7 @@ try {
     $telegramSources = @(
         @{ Name='send-fivehour100-existing-monitor-bot.ps1'; Hash='5207d4c4c4d342fa26d32561945f889a11aec9550b0c10735e030211a58da61f' },
         @{ Name='send-weekly100-existing-alert-bot.ps1'; Hash='a07643b41bee7551631b3bcc64bb292b3d621acc25febb5d9de3bea62fd028c7' }
+        @{ Name='send-fivehour-zero-existing-alert-bot.ps1'; Hash='a8ba975dc6d132928e8f9a38383ab5250bb07304b9f6f9f60910eff9c8c4cd4d' }
     )
     foreach ($script in $telegramSources) {
         $source = Join-Path (Join-Path $windowsRoot 'scripts') $script.Name

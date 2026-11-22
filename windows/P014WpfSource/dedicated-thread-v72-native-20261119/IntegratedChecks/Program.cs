@@ -387,6 +387,83 @@ await Test("5H pre-reset 0% evidence selects Alert Bot only in dry-run", () => {
         QuotaTelegramBot.MonitorMuted);
     return Task.CompletedTask;
 });
+await Test("5H zero Alert Bot has pinned no-send route and one durable event key", () => {
+    var synthetic = Path.Combine(Path.GetTempPath(), "codex-step3a-alert-" +
+        Guid.NewGuid().ToString("N"));
+    var host = Path.Combine(synthetic, "host");
+    var bot = Path.Combine(synthetic, "fake-existing-bot");
+    Directory.CreateDirectory(host);
+    Directory.CreateDirectory(bot);
+    try
+    {
+        var source = Path.GetFullPath(Path.Combine(
+            Directory.GetCurrentDirectory(), "..", "..", "..",
+            "windows", "scripts",
+            WindowsPackagedTelegramScripts.FiveHourZeroAlertScriptName));
+        var script = Path.Combine(host,
+            WindowsPackagedTelegramScripts.FiveHourZeroAlertScriptName);
+        File.Copy(source, script);
+        // Never load a real bot token or chat ID. These are dummy file
+        // metadata fixtures; no authentication, PowerShell or network.
+        foreach (var name in new[] {
+            "send-telegram-alert.ps1", "telegram-token.dpapi",
+            "telegram-chat-id.txt" })
+            File.WriteAllText(Path.Combine(bot, name), "offline-fixture-only");
+        var hostPath = Path.Combine(host, "SwitcherHost.exe");
+        File.WriteAllText(hostPath, "synthetic-host");
+        Ensure(WindowsPackagedTelegramScripts.Inspect(hostPath)
+            .FiveHourZeroAlertVerified);
+        var worker = new FiveHour100RecoveryWorker(synthetic);
+        var (watch, gate, account) = NewWatcher();
+        var first = windowBoundary.AddMinutes(-1);
+        Ensure(worker.Process(WindowSample(first, windowBoundary, weekBoundary,
+            used: 100), account, gate, first).Count == 0);
+        var after = windowBoundary.AddMinutes(1);
+        var sentEvents = worker.Process(WindowSample(after,
+            windowBoundary.AddMinutes(300), weekBoundary,
+            used: 2), account, gate, after);
+        Ensure(sentEvents.Count == 1);
+        var zero = sentEvents.Single();
+        var important = QuotaTelegramBotRouting.ForFiveHourZeroEscalation(zero);
+        var normal = QuotaTelegramBotRouting.ForFiveHour(zero);
+        Ensure(important is { Destination: QuotaTelegramBot.AlertImportant,
+            EncryptedTokenFileName: "telegram-token.dpapi",
+            ProposedSenderScriptName: "send-fivehour-zero-existing-alert-bot.ps1" });
+        Ensure(normal is { Destination: QuotaTelegramBot.MonitorMuted });
+        Ensure(important!.Text.Contains("직전 잔여 0%"));
+        var prepared = WindowsExistingAmanoBotRoute.PrepareFiveHourZero(
+            hostPath, bot, zero);
+        Ensure(prepared is { Silent: false, ActualTelegramSendAuthorized: false } &&
+            prepared.ReviewedCodexScriptPath == script &&
+            prepared.EventKey == zero.Key &&
+            prepared.Message == important!.Text);
+        // One shared 5H event key is claimed once regardless of which bot
+        // preview is selected; no second claim after failure/uncertainty.
+        var reserved = worker.ReserveMockDelivery(zero.Key, "MOCK_WINDOWS");
+        Ensure(reserved is {Status: "MOCK_RESERVED"} &&
+            worker.ReserveMockDelivery(zero.Key, "MOCK_WINDOWS") is null);
+        Ensure(worker.MarkMockUncertain(zero.Key, "MOCK_WINDOWS"));
+        Ensure(worker.ReserveMockDelivery(zero.Key, "MOCK_WINDOWS") is null);
+        var good = new WindowsAlertBotDryRunResult(0,
+            TelegramFiveHourZeroReceiptContract.FormatForFakeTest(zero.Key, 17) + Environment.NewLine);
+        Ensure(TelegramFiveHourZeroReceiptContract.TryParse(good, zero.Key, out var msg) &&
+            msg == 17);
+        Ensure(!TelegramFiveHourZeroReceiptContract.TryParse(good,
+            new string('a',64), out _));
+        Ensure(!TelegramFiveHourZeroReceiptContract.TryParse(
+            good with { StandardError = "fake-error" }, zero.Key, out _));
+        Ensure(!TelegramFiveHourZeroReceiptContract.TryParse(
+            new WindowsAlertBotDryRunResult(0,
+                TelegramWeekly100ReceiptContract.FormatForFakeTest(zero.Key, 17)),
+            zero.Key, out _));
+        // A changed local sender script never qualifies for the important route.
+        File.AppendAllText(script, "#tampered");
+        Ensure(WindowsExistingAmanoBotRoute.PrepareFiveHourZero(
+            hostPath, bot, zero) is null);
+    }
+    finally { if (Directory.Exists(synthetic)) Directory.Delete(synthetic, true); }
+    return Task.CompletedTask;
+});
 await Test("Scheduled 5H deadline observed but not emitted early", () => {
     var (watch,gate,account) = NewWatcher();
     var seen=windowBoundary.AddMinutes(-2);

@@ -98,6 +98,23 @@ jobs:
           }
           dotnet run --project windows/P014WpfSource/dedicated-thread-v72-native-20261119/IntegratedChecks/IntegratedChecks.csproj -c Release -- --native-swift-host-refresh-no-send $nativeHost
           if ($LASTEXITCODE -ne 0) { throw 'HOLD_NATIVE_ACTIVE_QUOTA_IPC_EARLY' }
+      - name: Verify 30s active and 15s idle-reset real elapsed intervals (synthetic no-send)
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          # Real elapsed timing through the actual Windows SwiftHost.exe and
+          # read-only fake Codex CLI, without any user credential or send.
+          # Both tests require an initial provider baseline plus 2 fresh reads.
+          $nativeBin = swift build -c release --show-bin-path
+          if ($LASTEXITCODE -ne 0) { throw 'HOLD_CLOCK_SWIFTHOST_BIN_PATH' }
+          $nativeHost = Join-Path $nativeBin.Trim() 'SwitcherHost.exe'
+          if (-not (Test-Path -LiteralPath $nativeHost -PathType Leaf)) {
+            throw 'HOLD_CLOCK_SWIFTHOST_MISSING'
+          }
+          dotnet run --project windows/P014WpfSource/dedicated-thread-v72-native-20261119/IntegratedChecks/IntegratedChecks.csproj -c Release -- --native-swift-host-clock-no-send $nativeHost active
+          if ($LASTEXITCODE -ne 0) { throw 'HOLD_ACTIVE_30S_WALLCLOCK' }
+          dotnet run --project windows/P014WpfSource/dedicated-thread-v72-native-20261119/IntegratedChecks/IntegratedChecks.csproj -c Release -- --native-swift-host-clock-no-send $nativeHost reset
+          if ($LASTEXITCODE -ne 0) { throw 'HOLD_RESET_15S_WALLCLOCK' }
       - name: Check native transport and shared storage with isolated credentials
         shell: pwsh
         run: |

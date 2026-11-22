@@ -18,6 +18,9 @@ if (args.Length is 1 or 2 && args[0] == "app-server" &&
     return await NativeSwiftHostRefreshSmoke.FakeCodexRpcAsync();
 if (args.Length == 2 && args[0] == "--native-swift-host-refresh-no-send")
     return await NativeSwiftHostRefreshSmoke.RunAsync(args[1]);
+if (args.Length == 3 && args[0] == "--native-swift-host-clock-no-send" &&
+    args[2] is "active" or "reset")
+    return await NativeSwiftHostRefreshSmoke.RunWallClockAsync(args[1], args[2]);
 
 int passed = 0, failed = 0;
 async Task Test(string title, Func<Task> action)

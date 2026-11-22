@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using CodexAccountSwitcher.Core;
 
-internal static class NativeSwiftHostRefreshSmoke
+internal static partial class NativeSwiftHostRefreshSmoke
 {
     private const string TestAccount = "synthetic-fixture-account";
     private const string TestMode = "P014_NATIVE_NO_SEND_SYNTHETIC_ONLY";
@@ -48,6 +48,13 @@ internal static class NativeSwiftHostRefreshSmoke
                 await Console.Out.FlushAsync();
                 return 94;
             }
+            // Wall-clock test only: keep the provider's 5H reset about
+            // 100 seconds away so the idle 15s watch is genuinely armed.
+            // Neither the fake account nor RPC methods have send capability.
+            var resetTime = Environment.GetEnvironmentVariable(
+                "CODEX_SWITCHER_FAKE_RESET_WATCH_MODE") == "reset"
+                    ? DateTimeOffset.UtcNow.AddSeconds(100).ToUnixTimeSeconds()
+                    : 2_000_000_000L;
             object response = method switch
             {
                 "account/read" => new
@@ -62,7 +69,7 @@ internal static class NativeSwiftHostRefreshSmoke
                         primary = new
                         {
                             usedPercent = 67, windowDurationMins = 300,
-                            resetsAt = 2_000_000_000L
+                            resetsAt = resetTime
                         },
                         secondary = new
                         {

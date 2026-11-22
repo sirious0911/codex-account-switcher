@@ -131,6 +131,38 @@ struct AccountControllerTests {
         #expect(try await fixture.store.loadUsageCache().entries.first?.usage.remainingPercent == 72)
     }
 
+    @Test func verifiedActiveOnlyQuotaDoesNotChangeAccountOrCredential() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        let active = try #require(fixture.model.activeAccountID)
+        let credential = try Data(contentsOf: fixture.active.appendingPathComponent("auth.json"))
+        let observation = try #require(try await fixture.model.readVerifiedActiveQuota())
+        #expect(observation.profileID == active)
+        #expect(observation.accountID == "demo-account")
+        #expect(observation.usage.remainingPercent == 72)
+        #expect(observation.usage.fiveHourRemainingPercent == 18)
+        #expect(await fixture.client.activeQuotaReadCount == 1)
+        #expect(fixture.model.activeAccountID == active)
+        #expect(try Data(contentsOf: fixture.active.appendingPathComponent("auth.json")) == credential)
+        #expect(try await fixture.store.loadRegistry().activeAccountID == active)
+    }
+
+    @Test func mismatchedActiveCredentialFailsClosedBeforeQuotaRead() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        let active = try #require(fixture.model.activeAccountID)
+        let wrongCredential = Data(#"{"tokens":{"account_id":"other-workspace"}}"#.utf8)
+        try wrongCredential.write(to: fixture.active.appendingPathComponent("auth.json"))
+        let observation = try await fixture.model.readVerifiedActiveQuota()
+        #expect(observation?.profileID == nil)
+        #expect(await fixture.client.activeQuotaReadCount == 0)
+        #expect(fixture.model.activeAccountID == active)
+    }
+
     @Test func settingsAreSavedImmediately() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }
@@ -313,6 +345,7 @@ private struct ControllerFixture {
 
 private actor FixtureClient: AccountClient {
     private(set) var identityReads = 0
+    private(set) var activeQuotaReadCount = 0
     private var usageFails = false
     private var resetExpiry: Date?
     private var consumedHomes: Set<URL> = []
@@ -336,6 +369,7 @@ private actor FixtureClient: AccountClient {
         return AccountIdentity(accountID: "demo-account", email: "demo@example.test")
     }
     func readWeeklyUsage(profileHome: URL) async throws -> WeeklyUsage {
+        activeQuotaReadCount += 1
         if usageFails { throw CodexClientError.connectionClosed }
         let resetConsumed = consumedHomes.contains(profileHome)
         return WeeklyUsage(

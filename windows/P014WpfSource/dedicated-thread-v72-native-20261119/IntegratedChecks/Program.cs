@@ -674,6 +674,23 @@ await Test("SwiftHost active-only observation matches strict Windows 5H/7D wire 
     Ensure(!gate.Allows(result.Sample!));
     return Task.CompletedTask;
 });
+await Test("Swift 6.2 emitted JSON parses as strict Windows active quota observation", () => {
+    // Fixture emitted by a Swift 6.2 independently typed implementation
+    // of the new Host.sendActiveQuotaObservation conversion.
+    // Not a claim that the entire Windows SwiftHost executable was compiled.
+    const string json = """
+    {"kind":"monitorObservation","observedAtMs":1795375798038,"profileID":"11111111-1111-4111-8111-111111111111","raw":{"accountId":"test-account","ordinaryUsageAllowed":null,"rateLimitResetCredits":{"availableCount":2},"rateLimitsByLimitId":{"codex":{"planType":null,"primary":{"resetsAt":1795382798,"usedPercent":50,"windowDurationMins":300},"secondary":{"resetsAt":1795475798,"usedPercent":70,"windowDurationMins":10080}}}}}
+    """;
+    var inspected = SwiftHostStrictEnvelopeV1Review.Inspect(json);
+    Ensure(inspected.Status == "OFFLINE_STRICT_WIRE_CANDIDATE_ONLY" &&
+        inspected.Sample?.ProfileID == profileId);
+    Ensure(MonitorSyntheticPreview.TryRead(inspected.Sample!.RawJson, out var quotas) &&
+        quotas!.FiveHourRemaining == 50 &&
+        quotas.WeeklyRemaining == 30 &&
+        quotas.CreditsRemaining == 2 &&
+        quotas.OrdinaryUsageAllowed is null);
+    return Task.CompletedTask;
+});
 await Test("Scheduled 5H deadline observed but not emitted early", () => {
     var (watch,gate,account) = NewWatcher();
     var seen=windowBoundary.AddMinutes(-2);

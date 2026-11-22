@@ -157,7 +157,9 @@ private final class Host {
         ]
         let raw: [String: Any] = [
             "accountId": accountID,
-            "ordinaryUsageAllowed": true,
+            // WeeklyUsage does not prove the optional ordinary-use
+            // entitlement. Never invent this authorization state.
+            "ordinaryUsageAllowed": NSNull(),
             "rateLimitsByLimitId": [
                 "codex": [
                     "planType": NSNull(),

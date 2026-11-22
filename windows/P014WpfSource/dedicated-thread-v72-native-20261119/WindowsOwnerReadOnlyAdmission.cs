@@ -19,5 +19,28 @@ internal static class WindowsOwnerReadOnlyAdmission
         return PendingTrust;
     }
 
+    // Diagnostic-only native protected-source observation. Even if HKLM and
+    // the ProgramData HEAD are present and their ACLs pass the OS checks,
+    // this DOES NOT validate the dual Ed25519 signatures, P0-12 enrollment,
+    // rollback floor acceptance, user DPAPI or the exclusive Sender lease.
+    // Never use a positive source-presence observation for admission.
+    internal static string ProtectedTrustSourceStatus()
+    {
+        var observation = WindowsP015AdminTrustSource.Probe();
+        return ProtectedSourceHoldStatus(observation.IsAvailable,
+            observation.Code);
+    }
+
+    // Pure mapping allows an in-memory positive-source fixture to verify
+    // that the OS *presence* of public inputs never unlocks the Owner.
+    internal static string ProtectedSourceHoldStatus(bool inputsPresent,
+        string? sourceCode)
+    {
+        if (inputsPresent)
+            return "HOLD_OWNER_SIGNED_HEAD_AND_ENROLLMENT_NOT_ADMITTED";
+        return sourceCode?.StartsWith("HOLD_P015_", StringComparison.Ordinal)
+            is true ? sourceCode : PendingTrust;
+    }
+
     internal static bool IsReady(string dataHome) => HoldReason(dataHome) is null;
 }

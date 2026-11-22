@@ -117,6 +117,12 @@ public partial class App : Application
             instance = new Mutex(true, @"Local\CodexAccountSwitcher-" + key, out ownsMutex);
             activateWindow = new EventWaitHandle(false, EventResetMode.AutoReset, @"Local\CodexAccountSwitcher-Activate-" + key);
             if (!ownsMutex) { activateWindow.Set(); Shutdown(); return; }
+            // P0-15: read only the separately protected Windows trust-source
+            // presence. This is an observable HOLD status, never a send gate
+            // or proof of dual-signed HEAD/registration admission.
+            System.Diagnostics.Trace.TraceInformation(
+                "P015 protected trust source (read-only): " +
+                WindowsOwnerReadOnlyAdmission.ProtectedTrustSourceStatus());
             ApplyTheme();
             var hostPath = HostRuntime.Resolve(Assembly.GetExecutingAssembly());
             var bundledBotScripts = WindowsPackagedTelegramScripts.Inspect(hostPath);

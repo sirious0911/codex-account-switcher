@@ -35,6 +35,35 @@ AccountSnapshot Snapshot(Guid? activeId, bool confirmed = true,
     return new AccountSnapshot(rows.ToArray(), activeId, new Preferences(),
         mutating, adding, confirmed, null, new Dictionary<string,string>());
 }
+await Test("P015 native protected-input status never enables Owner", () => {
+    // Production admission stays internal. Inspect it without granting
+    // the integrated test assembly any new permission to send or start.
+    var type = typeof(App).Assembly.GetType(
+        "CodexAccountSwitcher.WindowsOwnerReadOnlyAdmission", throwOnError: true)!;
+    var flags = BindingFlags.Static | BindingFlags.NonPublic;
+    var status = (string?)type.GetMethod("ProtectedTrustSourceStatus", flags)!
+        .Invoke(null, null);
+    Ensure(status is not null &&
+        status.StartsWith("HOLD_", StringComparison.Ordinal));
+    var holdReason = type.GetMethod("HoldReason", flags)!;
+    var isReady = type.GetMethod("IsReady", flags)!;
+    var home = Path.GetTempPath();
+    Ensure((string?)holdReason.Invoke(null, [home]) ==
+        "HOLD_OWNER_ADMISSION_TRUST_UNAVAILABLE");
+    Ensure((bool?)isReady.Invoke(null, [home]) == false);
+    var map = type.GetMethod("ProtectedSourceHoldStatus", flags)!;
+    // Even a hypothetical OS-protected source DOES NOT establish
+    // independent dual-signature or Owner lease admission.
+    Ensure((string?)map.Invoke(null, [
+        true, "P015_PROTECTED_INPUTS_PRESENT_SIGNATURE_UNCHECKED_NO_SEND"
+    ]) == "HOLD_OWNER_SIGNED_HEAD_AND_ENROLLMENT_NOT_ADMITTED");
+    Ensure((string?)map.Invoke(null, [false, "UNRECOGNIZED"]) ==
+        "HOLD_OWNER_ADMISSION_TRUST_UNAVAILABLE");
+    Ensure((string?)holdReason.Invoke(null, [string.Empty]) ==
+        "HOLD_OWNER_DATA_HOME");
+    return Task.CompletedTask;
+});
+
 var fake = new FakeAccountClient { State = Snapshot(profileId) };
 var binaryResolved = 0;
 var context = new PersonalExistingThreadContext(fake,

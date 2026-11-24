@@ -25,4 +25,4 @@ jobs:
         run: swift test --filter 'AdaptiveUsageCadenceTests|AccountControllerTests'
 
       - name: Test Telegram and monitor offline fixtures
-        run: swift test --filter 'MacTelegram|MacMonitorLedgerTests|MacGreetingDeadlinePreviewTests|MacGreetingThreadProofTests'
+        run: swift test --filter 'MacTelegram|MacMonitorLedgerTests|MacGreetingDeadlinePreviewTests|MacGreetingThreadProofTests|MacGreetingPreviewLedgerTests'

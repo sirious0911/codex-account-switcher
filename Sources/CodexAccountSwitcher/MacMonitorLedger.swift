@@ -64,6 +64,8 @@ final class MacMonitorLedger {
         let previousResetAtUnixMs: Int64
         let currentResetAtUnixMs: Int64
         let observedAtUnixMs: Int64
+        let preResetRemaining: Double?
+        let importantThreshold: Int?
 
         init(_ candidate: MacTelegramLocalOutbox.ConfirmedRecovery,
              plan: String) {
@@ -73,6 +75,8 @@ final class MacMonitorLedger {
             previousResetAtUnixMs = candidate.previousResetAtUnixMs
             currentResetAtUnixMs = candidate.currentResetAtUnixMs
             observedAtUnixMs = candidate.observedAtUnixMs
+            preResetRemaining = candidate.preResetRemaining
+            importantThreshold = candidate.importantThreshold
             eventKey = MacTelegramQuotaEventIdentity.build(
                 lane: candidate.lane,
                 accountIdSHA256: candidate.accountIdSHA256,
@@ -92,14 +96,16 @@ final class MacMonitorLedger {
                 previousResetAtUnixMs: previousResetAtUnixMs,
                 currentResetAtUnixMs: currentResetAtUnixMs) == eventKey,
                   observedAtUnixMs > 0,
-                  currentResetAtUnixMs > observedAtUnixMs
+                  currentResetAtUnixMs > observedAtUnixMs,
+                  MacResetNotificationText.valid(preResetRemaining, threshold: importantThreshold)
             else { return nil }
             return MacTelegramLocalOutbox.ConfirmedRecovery(
                 lane: kind, accountIdSHA256: accountIdSHA256,
                 previousResetAtUnixMs: previousResetAtUnixMs,
                 currentResetAtUnixMs: currentResetAtUnixMs,
                 observedAtUnixMs: observedAtUnixMs,
-                confirmedByTwoObservations: true)
+                confirmedByTwoObservations: true, preResetRemaining: preResetRemaining,
+                importantThreshold: importantThreshold)
         }
     }
 
@@ -113,6 +119,8 @@ final class MacMonitorLedger {
         var pendingReset: Int64? = nil
         var pendingAt: Int64? = nil
         var pendingUntil: Int64? = nil
+        var pendingPreResetRemaining: Double? = nil
+        var pendingImportantThreshold: Int? = nil
     }
 
     private struct State: Codable {
@@ -241,14 +249,14 @@ final class MacMonitorLedger {
     /// Only the verified active-account boundary may call this variant;
     /// this result itself does NOT authorize any Telegram send.
     func recordWithTelegramCandidates(
-        _ observation: CodexMonitorObservation
+        _ observation: CodexMonitorObservation, importantThreshold: Int = 5
     ) throws -> RecordWithTelegramCandidates {
-        try recordInternal(observation, captureTelegramCandidates: true)
+        try recordInternal(observation, captureTelegramCandidates: true, importantThreshold: importantThreshold)
     }
 
     private func recordInternal(
         _ observation: CodexMonitorObservation,
-        captureTelegramCandidates: Bool
+        captureTelegramCandidates: Bool, importantThreshold: Int = 5
     ) throws -> RecordWithTelegramCandidates {
         let next = try Self.parse(observation)
         let folder = directory.appending(path: Self.digest(next.accountID))
@@ -299,7 +307,8 @@ final class MacMonitorLedger {
         // Telegram candidates have independent trusted rollover evidence.
         // Legacy mock history still uses the original two-reading proposals.
         let candidates = Self.telegramRecoveries(
-            state: &state, next: next, capture: captureTelegramCandidates)
+            state: &state, next: next, capture: captureTelegramCandidates,
+            threshold: MacResetNotificationText.normalizedThreshold(importantThreshold))
 
         // Commit emittedKeys and the exactly matched recovery candidates in
         // ONE monitor-state snapshot. Candidate staging itself is still OFF.
@@ -327,7 +336,7 @@ final class MacMonitorLedger {
     }
 
     private static func telegramRecoveries(
-        state: inout State, next: Reading, capture: Bool
+        state: inout State, next: Reading, capture: Bool, threshold: Int
     ) -> [MacTelegramLocalOutbox.ConfirmedRecovery] {
         guard capture, next.allowed != false, let identity = next.identity,
               next.time > 0, next.time <= 253_402_300_799_000 else {
@@ -372,7 +381,8 @@ final class MacMonitorLedger {
                         previousResetAtUnixMs: old.reset * 1000,
                         currentResetAtUnixMs: reset * 1000,
                         observedAtUnixMs: next.time,
-                        confirmedByTwoObservations: true)
+                        confirmedByTwoObservations: true, preResetRemaining: old.pendingPreResetRemaining,
+                        importantThreshold: old.pendingImportantThreshold)
                     if let key = MacTelegramQuotaEventIdentity.build(
                         lane: lane, accountIdSHA256: candidate.accountIdSHA256,
                         previousResetAtUnixMs: candidate.previousResetAtUnixMs,
@@ -400,6 +410,8 @@ final class MacMonitorLedger {
                     : (cycle - 3600...cycle + 3600).contains(delta) &&
                         reset * 1000 >= now + 518_400_000)
             if rollover || recovery {
+                old.pendingPreResetRemaining = old.latest < prior && prior - old.latest <= 900_000 ? 100 - old.used : nil
+                old.pendingImportantThreshold = lane == .fiveHour ? threshold : nil
                 old.latest = now
                 old.pendingReset = reset
                 old.pendingAt = now

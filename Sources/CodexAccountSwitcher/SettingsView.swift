@@ -13,6 +13,7 @@ struct SettingsView: View {
     @AppStorage("TelegramNotificationsRequested") private var telegramNotificationsRequested = false
     @AppStorage("TelegramFiveHourRequested") private var telegramFiveHourRequested = true
     @AppStorage("TelegramWeeklyRequested") private var telegramWeeklyRequested = true
+    @AppStorage("FiveHourImportantThreshold") private var fiveHourImportantThreshold = 5
 
     // Deliberately transient, never AppStorage/Keychain/host auto-start.
     // No Authority network request is made before explicit button press.
@@ -140,12 +141,30 @@ struct SettingsView: View {
             .modifier(SettingsRowLayout())
             rowDivider
             HStack(spacing: 12) {
-                Text("5시간 100% 초기화 → 모니터 봇(묵음)")
+                Text("5시간 초기화 알림")
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                settingSwitch("5시간 100% 초기화 → 모니터 봇(묵음)", isOn: $telegramFiveHourRequested)
+                settingSwitch("5시간 초기화 알림", isOn: $telegramFiveHourRequested)
             }
             .modifier(SettingsRowLayout())
+            HStack(spacing: 12) {
+                Text("5H 중요 알림 기준")
+                Spacer(minLength: 8)
+                Picker("5H 중요 알림 잔여량 기준", selection: Binding(
+                    get: { MacResetNotificationText.normalizedThreshold(fiveHourImportantThreshold) },
+                    set: { fiveHourImportantThreshold = $0 }
+                )) {
+                    ForEach(0...20, id: \.self) { value in
+                        Text("\(value)% 이하").tag(value)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+            }
+            .modifier(SettingsRowLayout())
+            Text("초기화 직전 기준 이하: Alert Bot (예정) · 초과: Monitor Bot(묵음). 실제 중요 송신은 미연결.")
+                .foregroundStyle(.secondary)
+                .modifier(SettingsDetail())
             rowDivider
             HStack(spacing: 12) {
                 Text("7일 100% 초기화 → 얼럿 봇")

@@ -346,4 +346,50 @@ struct MacMonitorLedgerTests {
         }
         #expect(ledger.history().isEmpty)
     }
+    @Test func preResetBalanceAndThresholdSnapshotSurviveConfirmationAndRestart() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "mac-balance-preview-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let ledger = MacMonitorLedger(directory: root)
+        #expect(try ledger.recordWithTelegramCandidates(sample(
+            fiveUsed: 90, observed: t0 + 17_900), importantThreshold: 10).telegramCandidates.isEmpty)
+        #expect(try ledger.recordWithTelegramCandidates(sample(
+            fiveUsed: 4, fiveReset: t0 + 36_000,
+            observed: t0 + 18_030), importantThreshold: 10).telegramCandidates.isEmpty)
+        let result = try ledger.recordWithTelegramCandidates(sample(
+            fiveUsed: 5, fiveReset: t0 + 36_000,
+            observed: t0 + 18_060), importantThreshold: 5)
+        let candidate = try #require(result.telegramCandidates.first)
+        #expect(candidate.preResetRemaining == 10)
+        #expect(candidate.importantThreshold == 10)
+        #expect(MacResetNotificationText.important(.fiveHour, remaining: candidate.preResetRemaining,
+                                                   threshold: candidate.importantThreshold))
+        let recovered = try MacMonitorLedger(directory: root).persistedTelegramCandidates(
+            accountIdSHA256: candidate.accountIdSHA256, nowMilliseconds: candidate.observedAtUnixMs)
+        #expect(recovered.first?.preResetRemaining == 10)
+        #expect(recovered.first?.importantThreshold == 10)
+        let outbox = try MacTelegramLocalOutbox(directory: root.appending(path: "outbox"))
+        let key = try outbox.stage(candidate)
+        #expect(try outbox.ordinaryPendingText(key, for: .fiveHour) == nil)
+        #expect(throws: MacTelegramLocalOutbox.OutboxError.manualReviewRequired) {
+            try outbox.reserveBeforeSend(key)
+        }
+        #expect(try outbox.status(key) == .pending)
+    }
+
+    @Test func thresholdAndResetTextPreview() {
+        for threshold in 0...20 {
+            #expect(MacResetNotificationText.important(.fiveHour, remaining: Double(threshold), threshold: threshold))
+            #expect(!MacResetNotificationText.important(.fiveHour, remaining: Double(threshold)+0.01, threshold: threshold))
+            #expect(!MacResetNotificationText.important(.weekly, remaining: 0, threshold: threshold))
+        }
+        #expect(MacResetNotificationText.normalizedThreshold(nil) == 5)
+        #expect(MacResetNotificationText.normalizedThreshold(21) == 0)
+        #expect(!MacResetNotificationText.important(.fiveHour, remaining: nil, threshold: 5))
+        #expect(MacResetNotificationText.format(.weekly, observedAtMs: 1_800_000_000_000,
+                                                remaining: 12).contains("직전 잔여량: 12%"))
+        #expect(MacResetNotificationText.format(.fiveHour, observedAtMs: 1_800_000_000_000,
+                                                remaining: nil).contains("직전 잔여량: 미확인"))
+    }
+
 }

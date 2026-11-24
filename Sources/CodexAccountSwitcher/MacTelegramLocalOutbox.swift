@@ -34,6 +34,8 @@ final class MacTelegramLocalOutbox {
         /// Must come from a future verified TWO-reading recovery detector.
         /// Merely setting this flag never authorizes an actual send.
         let confirmedByTwoObservations: Bool
+        var preResetRemaining: Double? = nil
+        var importantThreshold: Int? = nil
     }
 
     private struct Pending: Codable {
@@ -43,6 +45,8 @@ final class MacTelegramLocalOutbox {
         let previousResetAtUnixMs: Int64
         let currentResetAtUnixMs: Int64
         let observedAtUnixMs: Int64
+        let preResetRemaining: Double?
+        let importantThreshold: Int?
     }
 
     private struct Receipt: Codable {
@@ -98,6 +102,7 @@ final class MacTelegramLocalOutbox {
     @discardableResult
     func stage(_ candidate: ConfirmedRecovery) throws -> String {
         guard candidate.confirmedByTwoObservations,
+              MacResetNotificationText.valid(candidate.preResetRemaining, threshold: candidate.importantThreshold),
               candidate.observedAtUnixMs > 0,
               candidate.currentResetAtUnixMs > candidate.observedAtUnixMs,
               let key = MacTelegramQuotaEventIdentity.build(
@@ -110,13 +115,17 @@ final class MacTelegramLocalOutbox {
             lane: candidate.lane.canonicalKind,
             previousResetAtUnixMs: candidate.previousResetAtUnixMs,
             currentResetAtUnixMs: candidate.currentResetAtUnixMs,
-            observedAtUnixMs: candidate.observedAtUnixMs)
+            observedAtUnixMs: candidate.observedAtUnixMs,
+            preResetRemaining: candidate.preResetRemaining,
+            importantThreshold: candidate.importantThreshold)
         if exists(key, "pending") {
             let previous = try readPending(key)
             guard previous.eventKey == pending.eventKey,
                   previous.lane == pending.lane,
                   previous.previousResetAtUnixMs == pending.previousResetAtUnixMs,
-                  previous.currentResetAtUnixMs == pending.currentResetAtUnixMs
+                  previous.currentResetAtUnixMs == pending.currentResetAtUnixMs,
+                  previous.preResetRemaining == pending.preResetRemaining,
+                  previous.importantThreshold == pending.importantThreshold
             else { throw OutboxError.corruptLedger }
             return key
         }
@@ -159,10 +168,27 @@ final class MacTelegramLocalOutbox {
         return try readPending(key).lane == lane.canonicalKind
     }
 
+    // Only ordinary routes can enter the existing mock delivery kernel.
+    // Important 5H remains a review-only candidate, with no sender permission.
+    func ordinaryPendingText(_ key: String, for lane: MacTelegramQuotaEventIdentity.Lane) throws -> String? {
+        guard try isPending(key, for: lane) else { return nil }
+        let item = try readPending(key)
+        guard !MacResetNotificationText.important(lane, remaining: item.preResetRemaining,
+                                                  threshold: item.importantThreshold) else { return nil }
+        return MacResetNotificationText.format(lane, observedAtMs: item.observedAtUnixMs,
+                                                remaining: item.preResetRemaining)
+    }
+
     /// This is a local irreversible one-shot reservation, not a send call.
     /// The marker is fsynced before the method can return successfully.
     func reserveBeforeSend(_ key: String) throws {
         guard try status(key) == .pending else { throw OutboxError.notPending }
+        let item = try readPending(key)
+        if item.lane == "FIVE_HOUR_100",
+           MacResetNotificationText.important(.fiveHour, remaining: item.preResetRemaining,
+                                               threshold: item.importantThreshold) {
+            throw OutboxError.manualReviewRequired
+        }
         if try hasUnresolvedSend() { throw OutboxError.manualReviewRequired }
         try writeExclusive(key, suffix: "reserved", data: Data("RESERVED_V1".utf8))
     }
@@ -244,7 +270,8 @@ final class MacTelegramLocalOutbox {
                   (pending.lane == "FIVE_HOUR_100" || pending.lane == "WEEKLY_100"),
                   pending.currentResetAtUnixMs > pending.previousResetAtUnixMs,
                   pending.currentResetAtUnixMs > pending.observedAtUnixMs,
-                  pending.observedAtUnixMs > 0
+                  pending.observedAtUnixMs > 0,
+                  MacResetNotificationText.valid(pending.preResetRemaining, threshold: pending.importantThreshold)
             else { throw OutboxError.corruptLedger }
             return pending
         } catch { throw OutboxError.corruptLedger }

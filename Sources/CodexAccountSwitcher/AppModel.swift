@@ -96,7 +96,8 @@ final class AppModel: AccountController, @MainActor ObservableObject {
                 let emittedCount: Int
                 if verifiedProfile != nil {
                     emittedCount = try self.monitorLedger.recordWithTelegramCandidates(
-                        observation).eventCount
+                        observation, importantThreshold: MacResetNotificationText.normalizedThreshold(
+                            UserDefaults.standard.object(forKey: "FiveHourImportantThreshold").map { $0 as? Int ?? -1 })).eventCount
                 } else {
                     emittedCount = try self.monitorLedger.record(observation)
                 }

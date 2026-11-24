@@ -31,11 +31,11 @@ final class MacTelegramBotDeliveryCoordinator {
 
         // Route binding is checked against immutable local event metadata,
         // never an untrusted caller's asserted lane.
-        guard (try? outbox.isPending(eventKey, for: lane)) == true,
+        guard let text = try? outbox.ordinaryPendingText(eventKey, for: lane),
               let credential = credentials.load(for: lane),
               let request = MacTelegramBotApiContract.makeRequest(
                   lane: lane, credentials: credential,
-                  text: MacTelegramBotApiContract.defaultText(for: lane))
+                  text: text)
         else { return .blocked }
 
         guard stillApproved(), !Task.isCancelled else { return .blocked }

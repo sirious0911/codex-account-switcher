@@ -1,0 +1,26 @@
+name: macOS adaptive usage source review
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - review/mac-adaptive-source-20261124
+permissions:
+  contents: read
+jobs:
+  native-mac:
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Record native toolchain
+        run: |
+          sw_vers
+          swift --version
+          printf 'source_sha=%s
+' "$GITHUB_SHA"
+      - name: Build native Mac application
+        run: swift build --product CodexAccountSwitcher
+      - name: Test adaptive usage policy and account controller
+        run: swift test --filter 'AdaptiveUsageCadenceTests|AccountControllerTests'

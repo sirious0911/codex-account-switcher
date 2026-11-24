@@ -257,6 +257,20 @@ public actor AccountStore: AccountStoring {
         }
     }
 
+    /// Supplemental quota polling may verify the already saved active login,
+    /// but must not import an account, copy credentials, or change the registry.
+    func confirmsSavedActiveProfile(_ expected: AccountProfile) throws -> Bool {
+        guard let registry, expected.accountID != nil,
+              registry.activeAccountID == expected.id,
+              registry.accounts.contains(where: { $0.id == expected.id && $0.accountID == expected.accountID }),
+              activeCredentialExists() else { return false }
+        let active = try readChecked(activeHomeURL.appending(path: "auth.json"))
+        guard let identity = try CredentialIdentity.decode(active),
+              identity.matches(expected) else { return false }
+        let saved = try readChecked(profileHome(id: expected.id).appending(path: "auth.json"))
+        return active == saved
+    }
+
     /// The live login determines the active profile. Identify and save the same credential bytes.
     public func syncActiveCredential() throws -> AccountRegistry {
         var current = try loadRegistry()

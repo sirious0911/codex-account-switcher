@@ -25,6 +25,8 @@ open class AccountController {
     private let switchService: any SwitchServicing
     private var hasStarted = false
     private var usageRefreshTask: Task<Void, Never>?
+    private var supplementalRefreshRunning = false
+    private var baselineRefreshPending = false
     private var nextUsageRefreshTask: Task<Void, Never>?
     private var addAccountTask: Task<Void, Never>?
     private var backgroundUsageRefreshInterval: Duration = .seconds(300)
@@ -94,7 +96,35 @@ open class AccountController {
         startUsageRefresh(activeOnly: true)
     }
 
+    /// Additional active-only requests must not postpone the independent
+    /// all-profile background timer. A busy controller rejects the request.
+    @discardableResult
+    public func refreshActiveUsagePreservingBaseline() -> Bool {
+        guard hasStarted, !isMutating, !isAddingAccount, activeIdentityConfirmed,
+              visibleError == nil, !baselineRefreshPending,
+              let id = activeAccountID,
+              let profile = accounts.first(where: { $0.id == id }),
+              usageRefreshTask == nil else { return false }
+        supplementalRefreshRunning = true
+        usageRefreshTask = Task { [weak self] in
+            guard let self else { return }
+            await self.performSupplementalActiveRefresh(profile)
+            self.usageRefreshTask = nil
+            self.supplementalRefreshRunning = false
+            let pending = self.baselineRefreshPending
+            self.baselineRefreshPending = false
+            if pending && !Task.isCancelled && !self.isMutating {
+                self.refreshWeeklyUsage()
+            }
+        }
+        return true
+    }
+
     private func startUsageRefresh(activeOnly: Bool) {
+        if supplementalRefreshRunning {
+            if !activeOnly { baselineRefreshPending = true }
+            return
+        }
         if isBackgroundUsageRefreshEnabled {
             scheduleNextWeeklyUsageRefresh()
         }
@@ -108,7 +138,9 @@ open class AccountController {
     }
 
     public func waitForWeeklyUsageRefresh() async {
-        await usageRefreshTask?.value
+        while let task = usageRefreshTask {
+            await task.value
+        }
     }
 
     private func refreshSubscriptionSnapshots() async {
@@ -132,6 +164,7 @@ open class AccountController {
 
     public func stopBackgroundUsageRefresh() {
         isBackgroundUsageRefreshEnabled = false
+        baselineRefreshPending = false
         nextUsageRefreshTask?.cancel()
         nextUsageRefreshTask = nil
         resetExpiryTask?.cancel()
@@ -150,6 +183,40 @@ open class AccountController {
             guard !Task.isCancelled, let self else { return }
             self.nextUsageRefreshTask = nil
             self.refreshWeeklyUsage()
+        }
+    }
+
+    // No syncActiveCredential, subscription refresh, credit consumption or
+    // reset-expiry scheduling is reachable through this supplemental read.
+    private func performSupplementalActiveRefresh(_ profile: AccountProfile) async {
+        func eligible() -> Bool {
+            !Task.isCancelled && !isMutating && !isAddingAccount &&
+                activeIdentityConfirmed && visibleError == nil &&
+                activeAccountID == profile.id
+        }
+        guard eligible() else { return }
+        do {
+            guard try await store.confirmsSavedActiveProfile(profile), eligible() else { return }
+            let home = await store.profileHome(id: profile.id)
+            guard eligible() else { return }
+            let fetched = try await codex.readUsage(profileHome: home)
+            guard try await store.confirmsSavedActiveProfile(profile), eligible() else { return }
+            switch fetched {
+            case let .weekly(usage):
+                usageStates[profile.id] = .loaded(usage)
+                if let observation = CodexMonitorPayloadEncoder.encode(
+                    profile: profile, usage: usage, planType: usage.planType,
+                    ordinaryUsageAllowed: usage.ordinaryUsageAllowed, observedAt: Date()
+                ), eligible() {
+                    onMonitorObservation?(observation)
+                }
+                try await store.cacheWeeklyUsage(usage, profileID: profile.id)
+            case let .nonWeekly(usage):
+                usageStates[profile.id] = .nonWeekly(usage)
+            }
+        } catch {
+            // Supplementary failure leaves the baseline's last value alone.
+            // The cadence's missing-observation backoff handles retries.
         }
     }
 
@@ -509,6 +576,7 @@ open class AccountController {
     }
 
     private func cancelUsageRefresh() async {
+        baselineRefreshPending = false
         usageRefreshTask?.cancel()
         await usageRefreshTask?.value
     }

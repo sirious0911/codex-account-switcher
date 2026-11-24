@@ -9,6 +9,7 @@ final class SwitcherAppDelegate: NSObject, NSApplicationDelegate {
 
     private var modelObservation: AnyCancellable?
     private var wakeObservation: AnyCancellable?
+    private let adaptiveUsage = MacAdaptiveUsageRefresh()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         modelObservation = model.objectWillChange.sink { [weak self] in
@@ -21,6 +22,7 @@ final class SwitcherAppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] _ in
                 Task { @MainActor in self?.model.refreshWeeklyUsage() }
             }
+        adaptiveUsage.start(model: model)
         Task { await model.startBackgroundUsageRefresh() }
     }
 }

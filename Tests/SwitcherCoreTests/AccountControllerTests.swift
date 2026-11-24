@@ -156,6 +156,61 @@ struct AccountControllerTests {
         #expect(observations.count == 1)
     }
 
+    @Test func supplementalRefreshDoesNotConsumeResetCredits() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        await fixture.model.setAutoResetEnabled(true)
+        await fixture.model.waitForWeeklyUsageRefresh()
+        await fixture.client.setResetExpiry(Date().addingTimeInterval(590))
+        let before = await fixture.client.usageReads
+        #expect(fixture.model.refreshActiveUsagePreservingBaseline())
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.usageReads == before + 1)
+        #expect(await fixture.client.consumeCalls == 0)
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.consumeCalls == 1)
+    }
+
+    @Test func supplementalRefreshQueuesFullBaselineAndSkipsInactiveProfiles() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        let profile = AccountProfile(id: UUID(), displayName: "Saved",
+            email: "other@example.test", accountID: "other", createdAt: Date())
+        let home = try await fixture.store.createProfileDirectory(id: profile.id)
+        try Data("saved-fixture".utf8).write(to: home.appendingPathComponent("auth.json"))
+        try await fixture.store.addProfile(profile)
+        await fixture.model.start()
+        let active = try #require(fixture.model.activeAccountID)
+        var observations: [UUID] = []
+        fixture.model.onMonitorObservation = { observations.append($0.profileID) }
+        #expect(fixture.model.refreshActiveUsagePreservingBaseline())
+        #expect(!fixture.model.refreshActiveUsagePreservingBaseline())
+        fixture.model.refreshWeeklyUsage()
+        fixture.model.refreshWeeklyUsage()
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.usageReads == 3)
+        #expect(observations.filter { $0 == active }.count == 2)
+        #expect(observations.filter { $0 == profile.id }.count == 1)
+    }
+
+    @Test func supplementalRefreshDoesNotImportChangedLogin() async throws {
+        let fixture = try ControllerFixture()
+        defer { fixture.clean() }
+        try fixture.writeActiveCredential()
+        await fixture.model.start()
+        let before = try await fixture.store.loadRegistry()
+        try Data("changed-login-fixture".utf8).write(
+            to: fixture.active.appendingPathComponent("auth.json"))
+        #expect(fixture.model.refreshActiveUsagePreservingBaseline())
+        await fixture.model.waitForWeeklyUsageRefresh()
+        #expect(await fixture.client.usageReads == 0)
+        #expect(try await fixture.store.loadRegistry() == before)
+    }
+
     @Test func settingsAreSavedImmediately() async throws {
         let fixture = try ControllerFixture()
         defer { fixture.clean() }
@@ -338,6 +393,7 @@ private struct ControllerFixture {
 
 private actor FixtureClient: AccountClient {
     private(set) var identityReads = 0
+    private(set) var usageReads = 0
     private var usageFails = false
     private var resetExpiry: Date?
     private var consumedHomes: Set<URL> = []
@@ -361,6 +417,7 @@ private actor FixtureClient: AccountClient {
         return AccountIdentity(accountID: "demo-account", email: "demo@example.test")
     }
     func readWeeklyUsage(profileHome: URL) async throws -> WeeklyUsage {
+        usageReads += 1
         if usageFails { throw CodexClientError.connectionClosed }
         let resetConsumed = consumedHomes.contains(profileHome)
         return WeeklyUsage(

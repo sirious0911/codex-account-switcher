@@ -523,6 +523,25 @@ public struct CodexClient: AccountClient {
         return try parseIdentity(result, profileHome: profileHome)
     }
 
+    #if os(macOS)
+    /// Explicit read-only review API. Not called from live polling or a sender.
+    /// The caller must independently validate the native executable and Desktop
+    /// home before any real session is opened. No resume, create, or turn methods.
+    public func readExistingThreadEvidence(profileHome: URL, selectedID: String)
+        async throws -> CodexExistingThreadReadEvidence {
+        guard let exactExecutable = locator.explicitURL, exactExecutable.isFileURL,
+              profileHome.isFileURL, CodexExistingThreadReadEvidence.validID(selectedID),
+              FileManager.default.isExecutableFile(atPath: exactExecutable.path)
+        else { throw CodexClientError.malformedResponse }
+        return try await withSession(profileHome: profileHome, exactExecutable: exactExecutable) { session in
+            try await CodexExistingThreadReadEvidence.collect(selectedID: selectedID) { step in
+                try await session.request(method: step.method, id: step.id,
+                    params: step.parameters(selectedID: selectedID), timeout: requestTimeout)
+            }
+        }
+    }
+    #endif
+
     public func readWeeklyUsage(profileHome: URL) async throws -> WeeklyUsage {
         switch try await readUsage(profileHome: profileHome) {
         case let .weekly(usage): return usage
@@ -661,9 +680,14 @@ public struct CodexClient: AccountClient {
 
     private func withSession<T: Sendable>(
         profileHome: URL,
+        exactExecutable: URL? = nil,
         operation: (JSONRPCSession) async throws -> T
     ) async throws -> T {
         let launch = try locator.launchConfiguration()
+        if let exactExecutable,
+           launch.executable.standardizedFileURL != exactExecutable.standardizedFileURL {
+            throw CodexClientError.executableNotFound
+        }
         let session = try JSONRPCSession(executableURL: launch.executable, profileHome: profileHome, environment: launch.environment)
         return try await withTaskCancellationHandler {
             do {

@@ -18,8 +18,7 @@ jobs:
         run: |
           sw_vers
           swift --version
-          printf 'source_sha=%s
-' "$GITHUB_SHA"
+          echo "source_sha=$GITHUB_SHA"
       - name: Build native Mac application
         run: swift build --product CodexAccountSwitcher
       - name: Test adaptive usage policy and account controller

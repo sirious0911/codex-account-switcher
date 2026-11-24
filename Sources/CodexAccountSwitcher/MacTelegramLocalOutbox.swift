@@ -77,21 +77,20 @@ final class MacTelegramLocalOutbox {
             throw OutboxError.unsafeDirectory
         }
 
-        // flock is an OS-process lock. A second running app instance cannot
-        // start a sender against this same local filesystem directory.
+        // Darwin O_EXLOCK obtains the exclusive flock atomically at open.
+        // O_NONBLOCK prevents a second executor from waiting for the owner.
         let lock = Darwin.open(folder.appending(path: ".executor.lock").path,
-            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, mode_t(0o600))
-        guard lock >= 0 else { throw OutboxError.storageUnavailable }
-        guard Darwin.flock(lock, LOCK_EX | LOCK_NB) == 0 else {
-            _ = Darwin.close(lock)
-            throw OutboxError.anotherExecutorActive
+            O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_EXLOCK | O_NONBLOCK,
+            mode_t(0o600))
+        guard lock >= 0 else {
+            if errno == EWOULDBLOCK { throw OutboxError.anotherExecutorActive }
+            throw OutboxError.storageUnavailable
         }
         self.directory = folder
         self.lockFD = lock
     }
 
     deinit {
-        _ = Darwin.flock(lockFD, LOCK_UN)
         _ = Darwin.close(lockFD)
     }
 

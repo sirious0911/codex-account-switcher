@@ -35,6 +35,10 @@ final class AppModel: AccountController, @MainActor ObservableObject {
     let objectWillChange = ObservableObjectPublisher()
     @Published private(set) var launchAtLoginState: LaunchAtLoginState = .disabled
     @Published private(set) var monitorHistory: [MacMonitorLedger.HistoryEntry] = []
+    @Published private(set) var greetingPreviewStatus = "자동 인사 감지 OFF"
+    private let greetingPreview = MacGreetingDeadlinePreview()
+    private var greetingPreviewSettings = MacGreetingPreviewSettings()
+    private var greetingPreviewProfile: UUID?
     private let quotaRelayPublisher = MacQuotaRelayPublisher()
     // V2 has no enrollment or sender in AppModel.live(); default OFF.
     private let quotaV2Encoder: MacQuotaV2FrameEncoder?
@@ -65,6 +69,7 @@ final class AppModel: AccountController, @MainActor ObservableObject {
             guard let self else { return }
             self.objectWillChange.send()
             self.refreshV2Identity()
+            self.refreshGreetingPreviewIdentity()
             self.telegramStageBridge?.invalidateIfUnverified(
                 activeProfileID: self.activeAccountID,
                 identityConfirmed: self.activeIdentityConfirmed,
@@ -75,6 +80,7 @@ final class AppModel: AccountController, @MainActor ObservableObject {
         monitorHistory = monitorLedger.history()
         onMonitorObservation = { [weak self] observation in
             guard let self else { return }
+            self.observeGreetingPreview(observation)
             let eligibleForOfflineStage = self.telegramStageBridge != nil &&
                 self.activeIdentityConfirmed && !self.isMutating &&
                 !self.isAddingAccount && self.visibleError == nil &&
@@ -164,6 +170,55 @@ final class AppModel: AccountController, @MainActor ObservableObject {
             }
         }
         refreshLaunchAtLoginStatus()
+    }
+
+    // Existing monitor observations and timer only: no additional RPC.
+    func resetGreetingPreview() {
+        greetingPreview.invalidate()
+        greetingPreviewProfile = nil
+        let settings = MacGreetingPreviewSettings.read(from: .standard)
+        greetingPreviewSettings = settings
+        greetingPreviewStatus = settings.enabledLanes.isEmpty
+            ? "자동 인사 감지 OFF" : "새로운 사용량 관측 대기 · 실제 송신 OFF"
+    }
+
+    private func refreshGreetingPreviewIdentity() {
+        let requested = MacGreetingPreviewSettings.read(from: .standard)
+        let eligible = activeIdentityConfirmed && !isMutating && !isAddingAccount &&
+            visibleError == nil && !requested.enabledLanes.isEmpty ? activeAccountID : nil
+        if requested != greetingPreviewSettings || eligible != greetingPreviewProfile {
+            greetingPreview.invalidate()
+            greetingPreviewSettings = requested
+            greetingPreviewProfile = eligible
+            greetingPreviewStatus = requested.enabledLanes.isEmpty ? "자동 인사 감지 OFF" :
+                eligible == nil ? "활성 계정 확인 대기 · 실제 송신 OFF" :
+                "새로운 사용량 관측 대기 · 실제 송신 OFF"
+        }
+    }
+
+    private func observeGreetingPreview(_ observation: CodexMonitorObservation) {
+        refreshGreetingPreviewIdentity()
+        guard let id = greetingPreviewProfile, id == observation.profileID,
+              let profile = accounts.first(where: { $0.id == id }) else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        greetingPreview.observe(observation, profile: profile, activeProfileID: id,
+            identityConfirmed: activeIdentityConfirmed, busy: isMutating || isAddingAccount,
+            nowMs: now)
+        evaluateGreetingPreview()
+    }
+
+    func evaluateGreetingPreview() {
+        refreshGreetingPreviewIdentity()
+        guard let id = greetingPreviewProfile,
+              let profile = accounts.first(where: { $0.id == id }) else { return }
+        let candidates = greetingPreview.takeDue(profile: profile, activeProfileID: id,
+            identityConfirmed: activeIdentityConfirmed, busy: isMutating || isAddingAccount,
+            nowMs: Int64(Date().timeIntervalSince1970 * 1000),
+            enabledLanes: greetingPreviewSettings.enabledLanes)
+        if !candidates.isEmpty {
+            let labels = candidates.map { $0.lane == .fiveHour ? "5H" : "7D" }.joined(separator: ", ")
+            greetingPreviewStatus = labels + " 초기화 예정 시각 감지 · 실제 송신 OFF"
+        }
     }
 
     /// Rebinds only after an actual verified identity or mutation transition.

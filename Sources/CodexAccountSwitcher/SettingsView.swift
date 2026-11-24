@@ -15,6 +15,10 @@ struct SettingsView: View {
     @AppStorage("TelegramWeeklyRequested") private var telegramWeeklyRequested = true
     @AppStorage("FiveHourImportantThreshold") private var fiveHourImportantThreshold = 5
 
+    @AppStorage("GreetingPreviewEnabled") private var greetingPreviewEnabled = false
+    @AppStorage("GreetingPreviewFiveHour") private var greetingPreviewFiveHour = true
+    @AppStorage("GreetingPreviewWeekly") private var greetingPreviewWeekly = true
+
     // Deliberately transient, never AppStorage/Keychain/host auto-start.
     // No Authority network request is made before explicit button press.
     @State private var authorityOrigin = ""
@@ -112,6 +116,46 @@ struct SettingsView: View {
                     .buttonStyle(.link)
             }
             .modifier(SettingsDetail())
+
+            Text("Codex 자동 인사 (준비)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
+                .padding(.bottom, 2)
+            HStack {
+                Text("초기화 시각 감지")
+                Spacer()
+                Toggle("초기화 시각 감지", isOn: $greetingPreviewEnabled).labelsHidden()
+            }
+            .modifier(SettingsRowLayout())
+            HStack {
+                Text("5H 초기화 감지")
+                Spacer()
+                Toggle("5H 초기화 감지", isOn: $greetingPreviewFiveHour).labelsHidden()
+                    .disabled(!greetingPreviewEnabled)
+            }
+            .modifier(SettingsRowLayout())
+            HStack {
+                Text("7D 초기화 감지")
+                Spacer()
+                Toggle("7D 초기화 감지", isOn: $greetingPreviewWeekly).labelsHidden()
+                    .disabled(!greetingPreviewEnabled)
+            }
+            .modifier(SettingsRowLayout())
+            Text("대상: Codex 사용량 초기화 전용 · 예정 메시지: 안녕")
+                .foregroundStyle(.secondary)
+                .modifier(SettingsDetail())
+            Text(model.greetingPreviewStatus)
+                .foregroundStyle(.secondary)
+                .modifier(SettingsDetail())
+            Text("감지 전용입니다. 실제 송신은 미연결 상태입니다.")
+                .foregroundStyle(.secondary)
+                .modifier(SettingsDetail())
+                .onChange(of: greetingPreviewEnabled) { _, _ in model.resetGreetingPreview() }
+                .onChange(of: greetingPreviewFiveHour) { _, _ in model.resetGreetingPreview() }
+                .onChange(of: greetingPreviewWeekly) { _, _ in model.resetGreetingPreview() }
 
             Text("Telegram 알림")
                 .font(.system(size: 11, weight: .medium))

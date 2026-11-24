@@ -86,7 +86,8 @@ final class MacGreetingDeadlinePreview {
         }
     }
     func takeDue(profile: AccountProfile, activeProfileID: UUID?,
-                 identityConfirmed: Bool, busy: Bool, nowMs: Int64) -> [Candidate] {
+                 identityConfirmed: Bool, busy: Bool, nowMs: Int64,
+                 enabledLanes: Set<Lane> = Set(Lane.allCases)) -> [Candidate] {
         guard identityConfirmed, !busy, profile.id == activeProfileID,
               profile.id == profileID,
               let account = CodexUsageSnapshotAdapter.accountKey(for: profile),
@@ -95,7 +96,7 @@ final class MacGreetingDeadlinePreview {
         else { invalidate(); return [] }
         var result: [Candidate] = []
         for lane in Lane.allCases {
-            guard let watch = watches[lane], nowMs >= watch.resetAtMs,
+            guard enabledLanes.contains(lane), let watch = watches[lane], nowMs >= watch.resetAtMs,
                   nowMs - watch.resetAtMs <= 600_000,
                   nowMs >= watch.observedAtMs,
                   nowMs - watch.observedAtMs <= 360_000 else { continue }

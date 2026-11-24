@@ -27,6 +27,7 @@ final class MacAdaptiveUsageRefresh {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
                 guard let self, let model else { return }
                 let now = Date()
+                (model as? AppModel)?.evaluateGreetingPreview()
                 self.cadence.select(self.eligibleProfile(model), now: now)
                 // Foreground plus recent session metadata, as on Windows.
                 // Never read rollout contents, or infer that a model is generating.

@@ -47,6 +47,72 @@ final class MacMonitorLedger {
     private struct Pending: Codable {
         var event: Event
         var firstObservedAtMilliseconds: Int64
+        // OFF-side pending events cannot become eligible after a later opt-in.
+        // Missing in older v1 records is treated as ineligible.
+        var telegramCaptureEligible: Bool? = nil
+    }
+
+    // Stored in the SAME atomic monitor snapshot as emittedKeys. If the app
+    // exits between confirming a reset and staging the future Telegram outbox,
+    // a fresh verified foreground session can recover the candidate instead
+    // of irreversibly losing it. Old v1 snapshots decode this optional as nil.
+    private struct StoredTelegramCandidate: Codable {
+        let eventKey: String
+        let lane: String
+        let accountIdSHA256: String
+        let plan: String
+        let previousResetAtUnixMs: Int64
+        let currentResetAtUnixMs: Int64
+        let observedAtUnixMs: Int64
+
+        init(_ candidate: MacTelegramLocalOutbox.ConfirmedRecovery,
+             plan: String) {
+            lane = candidate.lane.canonicalKind
+            accountIdSHA256 = candidate.accountIdSHA256
+            self.plan = plan
+            previousResetAtUnixMs = candidate.previousResetAtUnixMs
+            currentResetAtUnixMs = candidate.currentResetAtUnixMs
+            observedAtUnixMs = candidate.observedAtUnixMs
+            eventKey = MacTelegramQuotaEventIdentity.build(
+                lane: candidate.lane,
+                accountIdSHA256: candidate.accountIdSHA256,
+                previousResetAtUnixMs: candidate.previousResetAtUnixMs,
+                currentResetAtUnixMs: candidate.currentResetAtUnixMs) ?? ""
+        }
+
+        func candidate() -> MacTelegramLocalOutbox.ConfirmedRecovery? {
+            let kind: MacTelegramQuotaEventIdentity.Lane
+            switch lane {
+            case "FIVE_HOUR_100": kind = .fiveHour
+            case "WEEKLY_100": kind = .weekly
+            default: return nil
+            }
+            guard MacTelegramQuotaEventIdentity.build(
+                lane: kind, accountIdSHA256: accountIdSHA256,
+                previousResetAtUnixMs: previousResetAtUnixMs,
+                currentResetAtUnixMs: currentResetAtUnixMs) == eventKey,
+                  observedAtUnixMs > 0,
+                  currentResetAtUnixMs > observedAtUnixMs
+            else { return nil }
+            return MacTelegramLocalOutbox.ConfirmedRecovery(
+                lane: kind, accountIdSHA256: accountIdSHA256,
+                previousResetAtUnixMs: previousResetAtUnixMs,
+                currentResetAtUnixMs: currentResetAtUnixMs,
+                observedAtUnixMs: observedAtUnixMs,
+                confirmedByTwoObservations: true)
+        }
+    }
+
+    // Independent Telegram rollover detector: do not depend on the older
+    // mock monitor's 15-point usage-drop / exact 100% recovery heuristics.
+    private struct TelegramWatch: Codable {
+        var identity: String
+        var reset: Int64
+        var used: Double
+        var latest: Int64
+        var pendingReset: Int64? = nil
+        var pendingAt: Int64? = nil
+        var pendingUntil: Int64? = nil
     }
 
     private struct State: Codable {
@@ -56,6 +122,8 @@ final class MacMonitorLedger {
         var emittedKeys: Set<String> = []
         var outbox: [Event] = []
         var mockCompleted: Set<String> = []
+        var telegramCandidates: [StoredTelegramCandidate]? = nil
+        var telegramWatches: [String: TelegramWatch]? = nil
     }
 
     private struct Payload: Decodable {
@@ -97,7 +165,7 @@ final class MacMonitorLedger {
             return Window(used: nil, reset: nil)
         }
         let used = raw.usedPercent.flatMap { $0.isFinite && (0...100).contains($0) ? $0 : nil }
-        return Window(used: used, reset: raw.resetsAt.flatMap { $0 > 0 ? $0 : nil })
+        return Window(used: used, reset: raw.resetsAt.flatMap { $0 > 0 && $0 <= 253_402_300_799 ? $0 : nil })
     }
 
     private static func parse(_ observation: CodexMonitorObservation) throws -> Reading {
@@ -158,9 +226,30 @@ final class MacMonitorLedger {
         return output
     }
 
-    /// Returns newly confirmed events, not messages sent to a provider.
+    /// Preserve the original monitor-only contract while Telegram is OFF.
+    /// Do not persist future Telegram candidates for inactive/other accounts.
     @discardableResult
     func record(_ observation: CodexMonitorObservation) throws -> Int {
+        try recordInternal(observation, captureTelegramCandidates: false).eventCount
+    }
+
+    struct RecordWithTelegramCandidates {
+        let eventCount: Int
+        let telegramCandidates: [MacTelegramLocalOutbox.ConfirmedRecovery]
+    }
+
+    /// Only the verified active-account boundary may call this variant;
+    /// this result itself does NOT authorize any Telegram send.
+    func recordWithTelegramCandidates(
+        _ observation: CodexMonitorObservation
+    ) throws -> RecordWithTelegramCandidates {
+        try recordInternal(observation, captureTelegramCandidates: true)
+    }
+
+    private func recordInternal(
+        _ observation: CodexMonitorObservation,
+        captureTelegramCandidates: Bool
+    ) throws -> RecordWithTelegramCandidates {
         let next = try Self.parse(observation)
         let folder = directory.appending(path: Self.digest(next.accountID))
         let file = folder.appending(path: "state.json")
@@ -169,7 +258,6 @@ final class MacMonitorLedger {
             state = try JSONDecoder().decode(State.self, from: Data(contentsOf: file))
             guard state.version == 1 else { throw MonitorError.unsupportedState }
         } else { state = State() }
-
         var emitted: [Event] = []
         if next.identity == nil {
             state.trusted = nil
@@ -192,7 +280,8 @@ final class MacMonitorLedger {
                             }
                         } else {
                             pending.append(Pending(event: proposal,
-                                                   firstObservedAtMilliseconds: next.time))
+                                                   firstObservedAtMilliseconds: next.time,
+                                                   telegramCaptureEligible: captureTelegramCandidates))
                         }
                     }
                     state.pending = pending
@@ -207,10 +296,156 @@ final class MacMonitorLedger {
             state.pending = []
         }
 
+        // Telegram candidates have independent trusted rollover evidence.
+        // Legacy mock history still uses the original two-reading proposals.
+        let candidates = Self.telegramRecoveries(
+            state: &state, next: next, capture: captureTelegramCandidates)
+
+        // Commit emittedKeys and the exactly matched recovery candidates in
+        // ONE monitor-state snapshot. Candidate staging itself is still OFF.
+        if !candidates.isEmpty {
+            var saved = state.telegramCandidates ?? []
+            guard let currentPlan = next.plan, !currentPlan.isEmpty else {
+                throw MonitorError.invalidObservation
+            }
+            for candidate in candidates {
+                let item = StoredTelegramCandidate(candidate, plan: currentPlan)
+                guard !item.eventKey.isEmpty else {
+                    throw MonitorError.invalidObservation
+                }
+                if !saved.contains(where: { $0.eventKey == item.eventKey }) {
+                    saved.append(item)
+                }
+            }
+            state.telegramCandidates = saved
+        }
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        // macOS Foundation atomic replace: a crash must not leave a truncated JSON state.
+        // This writes only the monitor snapshot; no external service is called.
         try JSONEncoder().encode(state).write(to: file, options: .atomic)
-        return emitted.count
+        return RecordWithTelegramCandidates(
+            eventCount: emitted.count, telegramCandidates: candidates)
+    }
+
+    private static func telegramRecoveries(
+        state: inout State, next: Reading, capture: Bool
+    ) -> [MacTelegramLocalOutbox.ConfirmedRecovery] {
+        guard capture, next.allowed != false, let identity = next.identity,
+              next.time > 0, next.time <= 253_402_300_799_000 else {
+            // OFF-side observations may not seed a later ON-side rollover.
+            state.telegramWatches = nil
+            return []
+        }
+        var watches = state.telegramWatches ?? [:]
+        var result: [MacTelegramLocalOutbox.ConfirmedRecovery] = []
+        let lanes: [(String, MacTelegramQuotaEventIdentity.Lane, Window, Int64, Int64)] = [
+            ("five", .fiveHour, next.five, 18_000, 8 * 3_600_000),
+            ("week", .weekly, next.week, 604_800, 24 * 3_600_000)
+        ]
+        for (name, lane, window, cycle, maximumGap) in lanes {
+            guard let reset = window.reset, let used = window.used,
+                  (1...253_402_300_799).contains(reset), (0...100).contains(used) else {
+                watches.removeValue(forKey: name)
+                continue
+            }
+            let baseline = TelegramWatch(identity: identity, reset: reset,
+                                         used: used, latest: next.time)
+            // The provider can retain an expired deadline until new usage.
+            // Preserve the last valid future deadline rather than replacing it.
+            guard reset * 1000 > next.time else { continue }
+            guard var old = watches[name], old.identity == identity,
+                  (1...253_402_300_799).contains(old.reset),
+                  old.latest > 0, (0...100).contains(old.used) else {
+                watches[name] = baseline
+                continue
+            }
+            guard next.time > old.latest else { continue }
+            guard next.time - old.latest <= maximumGap else {
+                watches[name] = baseline
+                continue
+            }
+            if let pending = old.pendingReset, let first = old.pendingAt,
+               let until = old.pendingUntil {
+                if pending == reset, first > 0, next.time > first,
+                   next.time <= until, next.time - first <= 120_000 {
+                    let candidate = MacTelegramLocalOutbox.ConfirmedRecovery(
+                        lane: lane, accountIdSHA256: digest(next.accountID),
+                        previousResetAtUnixMs: old.reset * 1000,
+                        currentResetAtUnixMs: reset * 1000,
+                        observedAtUnixMs: next.time,
+                        confirmedByTwoObservations: true)
+                    if let key = MacTelegramQuotaEventIdentity.build(
+                        lane: lane, accountIdSHA256: candidate.accountIdSHA256,
+                        previousResetAtUnixMs: candidate.previousResetAtUnixMs,
+                        currentResetAtUnixMs: candidate.currentResetAtUnixMs),
+                       !(state.telegramCandidates ?? []).contains(where: { $0.eventKey == key }) {
+                        result.append(candidate)
+                    }
+                    watches[name] = baseline
+                    continue
+                }
+                // A changed or expired pending observation cannot be replayed.
+                // A return to the previous deadline can establish a baseline.
+                watches[name] = baseline
+                continue
+            }
+            let prior = old.reset * 1000
+            let delta = reset - old.reset
+            let now = next.time
+            let rollover = now >= prior - 180_000 && now <= prior + 600_000 &&
+                delta >= cycle - 600 && delta <= cycle + 600
+            let recovery = now >= prior - 120_000 && now <= prior + 2_100_000 &&
+                used <= 5 && old.used >= 15 && old.used - used >= 15 &&
+                (name == "five"
+                    ? (16_200...20_700).contains(delta) && reset * 1000 >= now + 10_800_000
+                    : (cycle - 3600...cycle + 3600).contains(delta) &&
+                        reset * 1000 >= now + 518_400_000)
+            if rollover || recovery {
+                old.latest = now
+                old.pendingReset = reset
+                old.pendingAt = now
+                old.pendingUntil = prior + (rollover ? 600_000 : 2_100_000)
+                watches[name] = old
+            } else {
+                watches[name] = baseline
+            }
+        }
+        state.telegramWatches = watches
+        return result
+    }
+
+    /// Recovery after a crash between monitoring and future local staging.
+    /// This does not stage/send anything and only returns fresh, internally
+    /// persisted candidates for a separately authenticated active account.
+    func persistedTelegramCandidates(
+        accountIdSHA256 hash: String, nowMilliseconds now: Int64
+    ) throws -> [MacTelegramLocalOutbox.ConfirmedRecovery] {
+        guard hash.utf8.count == 64,
+              hash.utf8.allSatisfy({ (48...57).contains(Int($0)) ||
+                                     (97...102).contains(Int($0)) }),
+              now > 0 else { throw MonitorError.invalidObservation }
+        let file = directory.appending(path: hash).appending(path: "state.json")
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        let state = try JSONDecoder().decode(
+            State.self, from: Data(contentsOf: file))
+        guard state.version == 1 else { throw MonitorError.unsupportedState }
+        guard let trusted = state.trusted,
+              Self.digest(trusted.accountID) == hash,
+              trusted.identity != nil, trusted.allowed != false,
+              trusted.time <= now,
+              now - trusted.time <= 20 * 60_000
+        else { return [] }
+        var found: [MacTelegramLocalOutbox.ConfirmedRecovery] = []
+        for stored in state.telegramCandidates ?? [] {
+            guard stored.accountIdSHA256 == hash,
+                  let candidate = stored.candidate()
+            else { throw MonitorError.unsupportedState }
+            guard stored.plan == trusted.plan,
+                  candidate.observedAtUnixMs <= now,
+                  now - candidate.observedAtUnixMs <= 20 * 60_000
+            else { continue }
+            found.append(candidate)
+        }
+        return found
     }
 
     func history(limit: Int = 20) -> [HistoryEntry] {

@@ -93,6 +93,7 @@ targets += [
             .unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"]),
             .linkedFramework("AppKit"),
             .linkedFramework("ServiceManagement"),
+            .linkedFramework("Security"),
         ]
     ),
     .testTarget(name: "CodexAccountSwitcherTests", dependencies: ["CodexAccountSwitcher", "SwitcherCore"],

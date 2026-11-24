@@ -42,13 +42,21 @@ final class AppModel: AccountController, @MainActor ObservableObject {
     private var quotaV2ActiveProfile: UUID?
     private var quotaV2IdentityEpoch: UInt64 = 0
     let remoteQuotaViewer = MacRemoteQuotaViewerModel()
-    private let monitorLedger = MacMonitorLedger(directory:
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appending(path: "Codex Account Switcher Personal/usage-monitor"))
+    private let monitorLedger: MacMonitorLedger
+    // Only an explicitly injected offline/test bridge enables candidate
+    // staging. AppModel.live() injects nil and never opens a Telegram outbox.
+    private let telegramStageBridge: MacTelegramCandidateStageBridge?
 
     init(store: AccountStore, codex: any AccountClient, switchService: any SwitchServicing,
          v2SourceDeviceID: String? = nil,
-         v2Publisher: MacQuotaV2HttpsPublisher? = nil) {
+         v2Publisher: MacQuotaV2HttpsPublisher? = nil,
+         telegramStageBridge: MacTelegramCandidateStageBridge? = nil,
+         injectedMonitorLedger: MacMonitorLedger? = nil) {
+        self.telegramStageBridge = telegramStageBridge
+        self.monitorLedger = injectedMonitorLedger ?? MacMonitorLedger(directory:
+            FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appending(path: "Codex Account Switcher Personal/usage-monitor"))
         self.quotaV2Publisher = v2Publisher
         self.quotaV2Encoder = v2Publisher == nil ? nil :
             v2SourceDeviceID.flatMap { MacQuotaV2FrameEncoder(sourceDeviceID: $0) }
@@ -57,17 +65,73 @@ final class AppModel: AccountController, @MainActor ObservableObject {
             guard let self else { return }
             self.objectWillChange.send()
             self.refreshV2Identity()
+            self.telegramStageBridge?.invalidateIfUnverified(
+                activeProfileID: self.activeAccountID,
+                identityConfirmed: self.activeIdentityConfirmed,
+                isMutating: self.isMutating, isAddingAccount: self.isAddingAccount,
+                hasVisibleError: self.visibleError != nil)
         }
         refreshV2Identity()
         monitorHistory = monitorLedger.history()
         onMonitorObservation = { [weak self] observation in
             guard let self else { return }
+            let eligibleForOfflineStage = self.telegramStageBridge != nil &&
+                self.activeIdentityConfirmed && !self.isMutating &&
+                !self.isAddingAccount && self.visibleError == nil &&
+                self.activeAccountID == observation.profileID
+            let activeProfile = eligibleForOfflineStage ?
+                self.accounts.first(where: { $0.id == observation.profileID }) : nil
+            let verifiedProfile = activeProfile.flatMap { profile in
+                MacTelegramCandidateStageBridge.matchesProviderIdentity(
+                    observation: observation, profile: profile) ? profile : nil
+            }
+            if activeProfile != nil && verifiedProfile == nil {
+                self.telegramStageBridge?.invalidate()
+            }
+            var monitorRecorded = false
             do {
-                try self.monitorLedger.record(observation)
-                self.monitorHistory = self.monitorLedger.history()
+                // Preserve ordinary monitor behavior while default-OFF or
+                // observing another profile. Only the verified active profile
+                // may durably capture Telegram candidates.
+                let emittedCount: Int
+                if verifiedProfile != nil {
+                    emittedCount = try self.monitorLedger.recordWithTelegramCandidates(
+                        observation).eventCount
+                } else {
+                    emittedCount = try self.monitorLedger.record(observation)
+                }
+                // The global history list changes only when a new mock event
+                // is committed. Normal quota polls are far more frequent and
+                // must not re-read/decode every per-account state.json.
+                if emittedCount > 0 {
+                    self.monitorHistory = self.monitorLedger.history()
+                }
+                monitorRecorded = true
             } catch {
-                // Monitoring is supplementary and must not interrupt account switching.
-                self.monitorHistory = self.monitorLedger.history()
+                // Keep the last successfully displayed history on a failed
+                // observation; re-reading every folder cannot repair the
+                // failed write and must not interrupt normal account polls.
+                self.telegramStageBridge?.invalidate()
+            }
+            if monitorRecorded,
+               let bridge = self.telegramStageBridge,
+               let profile = verifiedProfile {
+                do {
+                    _ = try bridge.stageAfterVerifiedObservation(
+                        monitorLedger: self.monitorLedger,
+                        observation: observation, profile: profile,
+                        activeProfileID: self.activeAccountID,
+                        identityConfirmed: self.activeIdentityConfirmed,
+                        isMutating: self.isMutating,
+                        isAddingAccount: self.isAddingAccount,
+                        hasVisibleError: self.visibleError != nil,
+                        nowMilliseconds: Int64(Date().timeIntervalSince1970 * 1000))
+                } catch {
+                    // The confirmed candidate remains in the monitor snapshot.
+                    // Staging failures never fall back to a direct send or
+                    // affect account switching and the usage UI.
+                    bridge.invalidate()
+                }
             }
             // Only the freshly observed, verified active account may publish
             // its non-secret 5H/7D view. Disabled unless a separate P3 HTTPS

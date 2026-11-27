@@ -1,0 +1,55 @@
+name: P201 isolated Windows Swift scope
+on:
+  push:
+    branches: [ci/p201-swift-scope-20261127]
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: compnerd/gha-setup-swift@397094e75494a93fa8d81db0268dbc8f5d6cf7c6
+        with:
+          swift-version: swift-6.3.3-release
+          swift-build: 6.3.3-RELEASE
+      - name: Build existing isolated RPC regression fixture
+        shell: pwsh
+        run: |
+          dotnet build windows/CodexAccountSwitcher.Checks -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { throw 'Legacy fixture build failed' }
+      - name: Verify exact source archive and run tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $pwd 'ci-input/P201-CI-source-only.zip'
+          $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -cne 'c8473dff53545e80f42d52f25e6d06a4af9f3c4de9f463218ae71024aece6b9f') { throw 'Wrong source archive' }
+          $env:SWITCHER_TEST_RPC_EXE = (Resolve-Path 'windows/CodexAccountSwitcher.Checks/bin/Release/net10.0-windows/CodexAccountSwitcher.Checks.exe').Path
+          $target = Join-Path $env:RUNNER_TEMP 'p201-verified-source'
+          if (Test-Path -LiteralPath $target) { throw 'Unexpected existing source folder' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $target
+          & (Join-Path $target 'run-build.ps1')
+          if ($LASTEXITCODE -ne 0) { throw 'Candidate build failed' }
+          Push-Location (Join-Path $target 'core')
+          try {
+            $bin = swift build -c release --show-bin-path
+            if ($LASTEXITCODE -ne 0) { throw 'Host path lookup failed' }
+            $result = Join-Path $env:RUNNER_TEMP 'p201-result'
+            New-Item -ItemType Directory -Path $result | Out-Null
+            Copy-Item -LiteralPath (Join-Path $bin 'SwitcherHost.exe') -Destination $result
+            $sha = (Get-FileHash -LiteralPath (Join-Path $result 'SwitcherHost.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+            @("source_commit=$env:GITHUB_SHA","source_archive_sha256=$hash","host_sha256=$sha") | Set-Content -Encoding utf8 (Join-Path $result 'provenance.txt')
+          } finally { Pop-Location }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: p201-unsigned-swift-host
+          path: ${{ runner.temp }}/p201-result/
+          if-no-files-found: error
+          retention-days: 7

@@ -28,9 +28,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $pwd 'ci-input/P201-CI-source-only.zip'
+          $archive = Join-Path $pwd 'ci-input/P204-CI-source-only.zip'
           $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -cne 'c8473dff53545e80f42d52f25e6d06a4af9f3c4de9f463218ae71024aece6b9f') { throw 'Wrong source archive' }
+          if ($hash -cne 'cdde0656393c2aa78c70993935d390ebe3b6ce44dab686af6c31a0f8a22aaeeb') { throw 'Wrong source archive' }
           $env:SWITCHER_TEST_RPC_EXE = (Resolve-Path 'windows/CodexAccountSwitcher.Checks/bin/Release/net10.0-windows/CodexAccountSwitcher.Checks.exe').Path
           $target = Join-Path $env:RUNNER_TEMP 'p201-verified-source'
           if (Test-Path -LiteralPath $target) { throw 'Unexpected existing source folder' }
@@ -87,7 +87,7 @@ jobs:
           } finally { Pop-Location }
       - uses: actions/upload-artifact@v4
         with:
-          name: p202-unsigned-swift-runtime
+          name: p204-unsigned-swift-runtime
           path: ${{ runner.temp }}/p201-result/
           if-no-files-found: error
           retention-days: 7

@@ -43,13 +43,51 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Host path lookup failed' }
             $result = Join-Path $env:RUNNER_TEMP 'p201-result'
             New-Item -ItemType Directory -Path $result | Out-Null
-            Copy-Item -LiteralPath (Join-Path $bin 'SwitcherHost.exe') -Destination $result
-            $sha = (Get-FileHash -LiteralPath (Join-Path $result 'SwitcherHost.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
-            @("source_commit=$env:GITHUB_SHA","source_archive_sha256=$hash","host_sha256=$sha") | Set-Content -Encoding utf8 (Join-Path $result 'provenance.txt')
+            $stage = Join-Path $env:RUNNER_TEMP 'p202-swift-runtime'
+            New-Item -ItemType Directory -Path $stage | Out-Null
+            Copy-Item -LiteralPath (Join-Path $bin 'SwitcherHost.exe') -Destination $stage
+            $targetInfo = (swift -print-target-info | ConvertFrom-Json)
+            if ($LASTEXITCODE -ne 0) { throw 'Swift target info failed' }
+            $runtime = $targetInfo.paths.runtimeLibraryPaths | Where-Object { Test-Path -LiteralPath (Join-Path $_ 'swiftCore.dll') } | Select-Object -First 1
+            if (-not $runtime -or -not (Test-Path -LiteralPath (Join-Path $runtime 'Foundation.dll'))) { throw 'Matching Swift runtime unavailable' }
+            Get-ChildItem -LiteralPath $runtime -Filter '*.dll' -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $stage }
+            Get-ChildItem -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'windows/licenses') -Filter '*.txt' -File | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $stage }
+            $entries = @(Get-ChildItem -LiteralPath $stage -File | Sort-Object Name | ForEach-Object {
+              [pscustomobject]@{path=$_.Name;bytes=$_.Length;sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
+            })
+            ConvertTo-Json -InputObject $entries -Depth 4 | Set-Content -Encoding utf8 (Join-Path $result 'runtime-manifest.json')
+            $zip = Join-Path $result 'SwiftRuntime.zip'
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip)
+            $sha = (Get-FileHash -LiteralPath (Join-Path $stage 'SwitcherHost.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+            $zipSha = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+            $manifestSha = (Get-FileHash -LiteralPath (Join-Path $result 'runtime-manifest.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+            @("source_commit=$env:GITHUB_SHA","source_archive_sha256=$hash","host_sha256=$sha","runtime_zip_sha256=$zipSha","runtime_manifest_sha256=$manifestSha") | Set-Content -Encoding utf8 (Join-Path $result 'provenance.txt')
+            # Test packaged host without Swift compiler directories in PATH.
+            $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $stage 'SwitcherHost.exe'))
+            $start.UseShellExecute = $false
+            $start.RedirectStandardInput = $true
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $start.Environment['PATH'] = "$env:SystemRoot\\System32;$env:SystemRoot"
+            $empty = Join-Path $env:RUNNER_TEMP 'p202-empty-host-home'
+            New-Item -ItemType Directory -Path $empty | Out-Null
+            $start.Environment['CODEX_HOME'] = $empty
+            $start.Environment['CODEX_SWITCHER_DATA_HOME'] = $empty
+            $process = [Diagnostics.Process]::Start($start)
+            try {
+              $stdout = $process.StandardOutput.ReadToEndAsync()
+              $stderr = $process.StandardError.ReadToEndAsync()
+              $process.StandardInput.Close()
+              if (-not $process.WaitForExit(15000)) { $process.Kill($true); throw 'Packaged host EOF timeout' }
+              if ($process.ExitCode -ne 0) { throw 'Packaged host failed to exit cleanly' }
+              if (-not $stdout.Wait(3000) -or -not $stderr.Wait(3000)) { throw 'Packaged host pipe closure unconfirmed' }
+              Write-Host 'PACKAGED_HOST_EMPTY_STDIN_EXIT_PASS'
+            } finally { $process.Dispose() }
           } finally { Pop-Location }
       - uses: actions/upload-artifact@v4
         with:
-          name: p201-unsigned-swift-host
+          name: p202-unsigned-swift-runtime
           path: ${{ runner.temp }}/p201-result/
           if-no-files-found: error
           retention-days: 7
